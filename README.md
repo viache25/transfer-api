@@ -176,7 +176,19 @@ curl -s "localhost:8080/transfers?accountId=1&page=0&size=20"
 ## Quickstart
 
 ```bash
-docker compose up -d postgres     # Postgres only, for now — see Project status
+docker compose up             # builds the app image, starts Postgres + the API
+```
+
+The API is then reachable at `localhost:8080`. The `app` service waits for
+Postgres to report healthy before starting; the datasource is configured via
+`SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD`
+env vars in `docker-compose.yml`, overridable for other environments.
+
+To run the app locally against a `docker compose` Postgres instead (e.g. for
+faster edit/rebuild cycles with `bootRun`):
+
+```bash
+docker compose up -d postgres     # Postgres only
 ./gradlew bootRun
 ```
 

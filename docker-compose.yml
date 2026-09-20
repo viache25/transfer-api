@@ -15,5 +15,17 @@ services:
       timeout: 5s
       retries: 5
 
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/transferapi
+      SPRING_DATASOURCE_USERNAME: transferapi
+      SPRING_DATASOURCE_PASSWORD: transferapi
+    ports:
+      - "8080:8080"
+
 volumes:
   pgdata:
