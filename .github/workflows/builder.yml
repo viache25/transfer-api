@@ -41,7 +41,7 @@ jobs:
           FORCED_STEP: ${{ inputs.step }}
         with:
           # Use CLAUDE_CODE_OAUTH_TOKEN instead if you authenticate with a Pro/Max subscription.
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --max-turns 120
           prompt: |
