@@ -100,6 +100,7 @@ jobs:
             RULES
             - Never force-push, never push directly to main, never commit secrets.
             - One step per run. Do not start a second step even if the first was small.
+            - You cannot push files under .github/workflows/ (the token lacks the workflows scope). If a step needs one, do everything else in the step, then comment on issue #1 with the exact file content for a human to add, log it as `blocked-on-human`, and move on without ticking the box.
             - Keep CLAUDE.md accurate when behaviour changes.
 
             PROJECT NOTES
