@@ -1,8 +1,11 @@
 package com.slavaslava.transferapi;
 
+import com.slavaslava.transferapi.config.ApiKeyHasher;
 import com.slavaslava.transferapi.domain.Account;
+import com.slavaslava.transferapi.domain.Terminal;
 import com.slavaslava.transferapi.dto.CreateTransferRequest;
 import com.slavaslava.transferapi.repository.AccountRepository;
+import com.slavaslava.transferapi.repository.TerminalRepository;
 import com.slavaslava.transferapi.repository.TransferRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +44,11 @@ class TransferIdempotencyIntegrationTest {
     @Autowired
     private TransferRepository transferRepository;
 
+    @Autowired
+    private TerminalRepository terminalRepository;
+
+    private static final String API_KEY = "test-terminal-key";
+
     private Long fromId;
     private Long toId;
 
@@ -48,12 +56,14 @@ class TransferIdempotencyIntegrationTest {
     void setUp() {
         fromId = accountRepository.save(new Account("Alice", new BigDecimal("100.00"), "EUR")).getId();
         toId = accountRepository.save(new Account("Bob", new BigDecimal("0.00"), "EUR")).getId();
+        terminalRepository.save(new Terminal("test-terminal", ApiKeyHasher.sha256Hex(API_KEY)));
     }
 
     @AfterEach
     void tearDown() {
         transferRepository.deleteAll();
         accountRepository.deleteAll();
+        terminalRepository.deleteAll();
     }
 
     @Test
@@ -63,6 +73,7 @@ class TransferIdempotencyIntegrationTest {
 
         MvcResult first = mockMvc.perform(post("/transfers")
                         .header("Idempotency-Key", idempotencyKey)
+                        .header("X-API-Key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -70,6 +81,7 @@ class TransferIdempotencyIntegrationTest {
 
         MvcResult second = mockMvc.perform(post("/transfers")
                         .header("Idempotency-Key", idempotencyKey)
+                        .header("X-API-Key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isOk())
@@ -90,12 +102,14 @@ class TransferIdempotencyIntegrationTest {
 
         mockMvc.perform(post("/transfers")
                         .header("Idempotency-Key", idempotencyKey)
+                        .header("X-API-Key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new CreateTransferRequest(fromId, toId, new BigDecimal("30.00")))))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(post("/transfers")
                         .header("Idempotency-Key", idempotencyKey)
+                        .header("X-API-Key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new CreateTransferRequest(fromId, toId, new BigDecimal("55.00")))))
                 .andExpect(status().isUnprocessableContent());
