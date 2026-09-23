@@ -24,6 +24,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/transferapi
       SPRING_DATASOURCE_USERNAME: transferapi
       SPRING_DATASOURCE_PASSWORD: transferapi
+      SPRING_PROFILES_ACTIVE: dev
     ports:
       - "8080:8080"
 

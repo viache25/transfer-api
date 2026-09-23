@@ -23,6 +23,7 @@ this project.
 - [How a transfer stays safe under retries and races](#how-a-transfer-stays-safe-under-retries-and-races)
 - [Architecture](#architecture)
 - [API](#api)
+- [Authentication](#authentication)
 - [Quickstart](#quickstart)
 - [Testing](#testing)
 - [Tech stack](#tech-stack)
@@ -134,44 +135,61 @@ Hibernate is `ddl-auto=validate` only — it never generates DDL.
 <details>
 <summary><strong>curl walkthrough</strong></summary>
 
+Every request needs a per-terminal `X-API-Key` header (see
+[Authentication](#authentication) below); a request without one gets `401`.
+
 ```bash
+API_KEY=dev-local-terminal-key   # seeded automatically when the dev profile is active
+
 # open two accounts
 curl -s -X POST localhost:8080/accounts \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -d '{"owner":"Alice","initialBalance":100.00,"currency":"EUR"}'
 # -> {"id":1,"owner":"Alice","balance":100.00,"currency":"EUR"}
 
 curl -s -X POST localhost:8080/accounts \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -d '{"owner":"Bob","initialBalance":0,"currency":"EUR"}'
 # -> {"id":2,"owner":"Bob","balance":0.00,"currency":"EUR"}
 
 # transfer 30.00 from Alice to Bob
 curl -s -X POST localhost:8080/transfers \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -H "Idempotency-Key: 6c1f6e2a-0000-4c00-8000-000000000001" \
   -d '{"fromAccountId":1,"toAccountId":2,"amount":30.00}'
 # -> 201 Created {"id":1,"fromAccountId":1,"toAccountId":2,"amount":30.00,"status":"COMPLETED",...}
 
 # retry the exact same request — same key, same body
 curl -s -X POST localhost:8080/transfers \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -H "Idempotency-Key: 6c1f6e2a-0000-4c00-8000-000000000001" \
   -d '{"fromAccountId":1,"toAccountId":2,"amount":30.00}'
 # -> 200 OK, same transfer id — Bob was NOT credited twice
 
 # reuse the key with a different amount — rejected, not silently replayed
 curl -s -X POST localhost:8080/transfers \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -H "Idempotency-Key: 6c1f6e2a-0000-4c00-8000-000000000001" \
   -d '{"fromAccountId":1,"toAccountId":2,"amount":999.00}'
 # -> 422 Unprocessable Content (RFC 7807 problem+json)
 
 # paginated history
-curl -s "localhost:8080/transfers?accountId=1&page=0&size=20"
+curl -s "localhost:8080/transfers?accountId=1&page=0&size=20" -H "X-API-Key: $API_KEY"
 ```
 
 </details>
+
+## Authentication
+
+Every endpoint except `/actuator/health`, `/v3/api-docs/**` and `/swagger-ui/**`
+requires a per-terminal API key in the `X-API-Key` header. Keys are stored as
+SHA-256 hashes in a `terminals` table and checked by a Spring Security filter;
+a missing or unrecognized key gets a `401` RFC 7807 response. Running with the
+`dev` Spring profile active (the default in `docker compose up`, via
+`SPRING_PROFILES_ACTIVE=dev`) seeds one terminal with the key
+`dev-local-terminal-key` on startup — convenient for local curl/README use,
+never enabled outside `dev`. There's no admin API yet for provisioning
+terminals in other environments; insert rows into `terminals` directly for now.
 
 ## Quickstart
 
@@ -215,8 +233,8 @@ docker compose up -d postgres
 
 ## Tech stack
 
-Java 21 · Spring Boot 4 · Gradle · PostgreSQL + Flyway · JUnit 5 + Mockito ·
-Docker Compose · GitHub Actions · springdoc-openapi
+Java 21 · Spring Boot 4 · Gradle · PostgreSQL + Flyway · Spring Security ·
+JUnit 5 + Mockito · Docker Compose · GitHub Actions · springdoc-openapi
 
 ## Project status
 
