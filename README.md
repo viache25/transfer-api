@@ -132,6 +132,10 @@ Hibernate is `ddl-auto=validate` only — it never generates DDL.
 | `POST` | `/transfers` | Transfer between two accounts (requires `Idempotency-Key` header) |
 | `GET` | `/transfers?accountId=&page=` | Paginated transfer history for an account |
 
+Interactive docs: `/swagger-ui.html` (Swagger UI) and `/v3/api-docs` (raw OpenAPI JSON) —
+both public, no `X-API-Key` needed to view them. The `Idempotency-Key` header and the
+`X-API-Key` security scheme are documented on every endpoint that needs them.
+
 <details>
 <summary><strong>curl walkthrough</strong></summary>
 
@@ -244,9 +248,9 @@ JUnit 5 + Mockito · Docker Compose · GitHub Actions · springdoc-openapi
 - [x] Optimistic locking with retry on concurrent transfers
 - [x] RFC 7807 error responses
 - [x] Unit tests (Mockito) + integration tests (idempotency, concurrency)
-- [ ] Dockerfile + full docker-compose (app + Postgres)
-- [ ] GitHub Actions CI running the full suite on every push
-- [ ] OpenAPI UI (springdoc)
+- [x] Dockerfile + full docker-compose (app + Postgres)
+- [x] GitHub Actions CI running the full suite on every push
+- [x] OpenAPI UI (springdoc)
 
 **Phase 2 — extensions** (after phase 1 ships): Redis idempotency cache +
 rate limiting, Spring Security, Actuator/Prometheus/Grafana, Testcontainers.
