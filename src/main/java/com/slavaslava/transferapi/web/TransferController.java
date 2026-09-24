@@ -4,6 +4,7 @@ import com.slavaslava.transferapi.dto.CreateTransferRequest;
 import com.slavaslava.transferapi.dto.TransferCreationResult;
 import com.slavaslava.transferapi.dto.TransferResponse;
 import com.slavaslava.transferapi.service.TransferService;
+import io.swagger.v3.oas.annotations.Parameter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -33,7 +34,9 @@ public class TransferController {
 
     @PostMapping
     public ResponseEntity<TransferResponse> create(@Valid @RequestBody CreateTransferRequest request,
-                                                     @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 255) String idempotencyKey) {
+                                                     @RequestHeader("Idempotency-Key")
+                                                     @Parameter(description = "Client-generated key that makes a retried request replay the original result instead of re-executing it.")
+                                                     @NotBlank @Size(max = 255) String idempotencyKey) {
         TransferCreationResult result = transferService.createTransfer(request, idempotencyKey);
         return ResponseEntity.status(result.replayed() ? HttpStatus.OK : HttpStatus.CREATED).body(result.transfer());
     }
