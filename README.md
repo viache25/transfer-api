@@ -128,7 +128,7 @@ Hibernate is `ddl-auto=validate` only — it never generates DDL.
 |---|---|---|
 | `POST` | `/accounts` | Open an account |
 | `GET` | `/accounts/{id}` | Get an account |
-| `POST` | `/accounts/{id}/deposit` | Deposit funds |
+| `POST` | `/accounts/{id}/deposit` | Deposit funds (idempotent if an `Idempotency-Key` header is supplied) |
 | `POST` | `/transfers` | Transfer between two accounts (requires `Idempotency-Key` header) |
 | `GET` | `/transfers?accountId=&page=` | Paginated transfer history for an account |
 
