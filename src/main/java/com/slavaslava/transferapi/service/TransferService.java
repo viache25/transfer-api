@@ -6,6 +6,8 @@ import com.slavaslava.transferapi.dto.TransferCreationResult;
 import com.slavaslava.transferapi.dto.TransferResponse;
 import com.slavaslava.transferapi.exception.IdempotencyKeyReuseException;
 import com.slavaslava.transferapi.repository.TransferRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
@@ -20,10 +22,22 @@ public class TransferService {
 
     private final TransferRepository transferRepository;
     private final TransferTransactionExecutor transactionExecutor;
+    private final Counter createdCounter;
+    private final Counter replayedCounter;
+    private final Counter lockRetriesCounter;
+    private final Counter keyReuseRejectedCounter;
 
-    public TransferService(TransferRepository transferRepository, TransferTransactionExecutor transactionExecutor) {
+    public TransferService(TransferRepository transferRepository, TransferTransactionExecutor transactionExecutor,
+                            MeterRegistry meterRegistry) {
         this.transferRepository = transferRepository;
         this.transactionExecutor = transactionExecutor;
+        // ".created" is a reserved OpenMetrics suffix that Micrometer's Prometheus naming convention
+        // strips (it's meant for internal series-creation timestamps), which would silently collapse
+        // this into the meaningless "transfers_total" on /actuator/prometheus; ".count" avoids that
+        this.createdCounter = meterRegistry.counter("transfers.created.count");
+        this.replayedCounter = meterRegistry.counter("transfers.replayed");
+        this.lockRetriesCounter = meterRegistry.counter("transfers.lock_retries");
+        this.keyReuseRejectedCounter = meterRegistry.counter("transfers.key_reuse_rejected");
     }
 
     // deliberately not @Transactional: each retry attempt must run in its own transaction
@@ -38,11 +52,13 @@ public class TransferService {
         while (true) {
             try {
                 Transfer created = transactionExecutor.execute(request, idempotencyKey);
+                createdCounter.increment();
                 return new TransferCreationResult(TransferResponse.from(created), false);
             } catch (OptimisticLockingFailureException e) {
                 if (++failedAttempts >= MAX_LOCK_ATTEMPTS) {
                     throw e;
                 }
+                lockRetriesCounter.increment();
             } catch (DataIntegrityViolationException e) {
                 // another request raced us with the same idempotency key and inserted first;
                 // if no such transfer exists the violation had a different cause — rethrow it
@@ -65,8 +81,10 @@ public class TransferService {
                 && existing.getToAccountId().equals(request.toAccountId())
                 && existing.getAmount().compareTo(request.amount()) == 0;
         if (!samePayload) {
+            keyReuseRejectedCounter.increment();
             throw new IdempotencyKeyReuseException(existing.getIdempotencyKey());
         }
+        replayedCounter.increment();
         return TransferResponse.from(existing);
     }
 }
