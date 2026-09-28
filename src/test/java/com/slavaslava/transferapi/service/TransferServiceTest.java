@@ -6,6 +6,7 @@ import com.slavaslava.transferapi.dto.CreateTransferRequest;
 import com.slavaslava.transferapi.dto.TransferCreationResult;
 import com.slavaslava.transferapi.exception.IdempotencyKeyReuseException;
 import com.slavaslava.transferapi.repository.TransferRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,12 +37,18 @@ class TransferServiceTest {
     private TransferTransactionExecutor transactionExecutor;
 
     private TransferService transferService;
+    private SimpleMeterRegistry meterRegistry;
 
     private final CreateTransferRequest request = new CreateTransferRequest(1L, 2L, new BigDecimal("10.00"));
 
     @BeforeEach
     void setUp() {
-        transferService = new TransferService(transferRepository, transactionExecutor);
+        meterRegistry = new SimpleMeterRegistry();
+        transferService = new TransferService(transferRepository, transactionExecutor, meterRegistry);
+    }
+
+    private double counter(String name) {
+        return meterRegistry.get(name).counter().count();
     }
 
     @Test
@@ -53,6 +60,8 @@ class TransferServiceTest {
         assertThat(result.transfer().id()).isEqualTo(1L);
         assertThat(result.replayed()).isTrue();
         verify(transactionExecutor, never()).execute(any(), any());
+        assertThat(counter("transfers.replayed")).isEqualTo(1.0);
+        assertThat(counter("transfers.created.count")).isEqualTo(0.0);
     }
 
     @Test
@@ -62,6 +71,7 @@ class TransferServiceTest {
         assertThatThrownBy(() -> transferService.createTransfer(request, "key-1"))
                 .isInstanceOf(IdempotencyKeyReuseException.class);
         verify(transactionExecutor, never()).execute(any(), any());
+        assertThat(counter("transfers.key_reuse_rejected")).isEqualTo(1.0);
     }
 
     @Test
@@ -74,6 +84,7 @@ class TransferServiceTest {
         assertThat(result.transfer().id()).isEqualTo(5L);
         assertThat(result.replayed()).isFalse();
         verify(transactionExecutor, times(1)).execute(request, "key-1");
+        assertThat(counter("transfers.created.count")).isEqualTo(1.0);
     }
 
     @Test
@@ -88,6 +99,7 @@ class TransferServiceTest {
 
         assertThat(result.transfer().id()).isEqualTo(7L);
         verify(transactionExecutor, times(3)).execute(request, "key-1");
+        assertThat(counter("transfers.lock_retries")).isEqualTo(2.0);
     }
 
     @Test
