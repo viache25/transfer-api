@@ -25,6 +25,7 @@ this project.
 - [API](#api)
 - [Authentication](#authentication)
 - [Quickstart](#quickstart)
+- [Monitoring](#monitoring)
 - [Testing](#testing)
 - [Tech stack](#tech-stack)
 - [Project status](#project-status)
@@ -217,6 +218,20 @@ docker compose up -d postgres     # Postgres only
 The app needs Postgres to start at all — schema is Flyway-managed and
 `ddl-auto=validate`, so there's no in-memory fallback.
 
+## Monitoring
+
+`docker compose up` also starts Prometheus and Grafana (config under `ops/`):
+
+| Service | URL | Notes |
+|---|---|---|
+| API | `localhost:8080` | metrics at `/actuator/prometheus` (public) |
+| Prometheus | `localhost:9090` | scrapes the app every 5s |
+| Grafana | `localhost:3000` | anonymous admin; "Transfer API" dashboard is pre-provisioned |
+
+The dashboard shows the transfer counters (`transfers_created_count_total`,
+`transfers_replayed_total`, `transfers_lock_retries_total`,
+`transfers_key_reuse_rejected_total`) plus HTTP request rate and latency percentiles.
+
 ## Testing
 
 ```bash
@@ -251,6 +266,7 @@ JUnit 5 + Mockito · Docker Compose · GitHub Actions · springdoc-openapi
 - [x] Dockerfile + full docker-compose (app + Postgres)
 - [x] GitHub Actions CI running the full suite on every push
 - [x] OpenAPI UI (springdoc)
+- [x] Prometheus + Grafana dashboard in docker compose
 
 **Phase 2 — extensions** (after phase 1 ships): Redis idempotency cache +
 rate limiting, Spring Security, Actuator/Prometheus/Grafana, Testcontainers.
