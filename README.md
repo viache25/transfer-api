@@ -1,46 +1,67 @@
 # Transfer API
 
 <p>
+  <a href="https://github.com/viache25/transfer-api/actions/workflows/ci.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/viache25/transfer-api/actions/workflows/cd.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/cd.yml/badge.svg" alt="CD"></a>
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
-  <img src="https://img.shields.io/badge/PostgreSQL-Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL + Flyway">
-  <img src="https://img.shields.io/badge/tests-JUnit%205%20%2B%20Mockito-25A162?logo=junit5&logoColor=white" alt="JUnit 5 + Mockito">
+  <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
+  <img src="https://img.shields.io/badge/tests-43%20automated-25A162?logo=junit5&logoColor=white" alt="43 automated tests">
+  <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-in%20progress-yellow" alt="Status: in progress">
 </p>
 
-A REST API for account-to-account money transfers. The interesting part isn't
-moving money between two columns — it's that the client on the other end of
-this API is conceptually a **POS terminal on a bad network**: it retries
-requests it isn't sure got through, and the server must guarantee it never
-charges a customer twice for the same swipe.
+A REST API for account-to-account money transfers, built as a complete,
+production-shaped service: domain logic, security, automated tests, CI/CD,
+container delivery and observability.
 
-That guarantee — **idempotency under concurrency** — is the actual subject of
-this project.
+The client on the other end of this API is conceptually a **POS terminal on a
+bad network**. It retries requests it isn't sure got through, and the server
+must guarantee it never charges a customer twice for the same swipe. That
+guarantee, **idempotency under concurrency**, is the core subject of the
+project, and the test suite is built to prove it.
 
 ## Table of contents
 
+- [Highlights](#highlights)
 - [Why idempotency, specifically](#why-idempotency-specifically)
 - [How a transfer stays safe under retries and races](#how-a-transfer-stays-safe-under-retries-and-races)
 - [Architecture](#architecture)
 - [API](#api)
 - [Authentication](#authentication)
 - [Quickstart](#quickstart)
+- [Testing and quality](#testing-and-quality)
+- [CI/CD pipeline](#cicd-pipeline)
 - [Monitoring](#monitoring)
-- [Testing](#testing)
+- [Deploying to a server](#deploying-to-a-server)
+- [Repository layout](#repository-layout)
 - [Tech stack](#tech-stack)
-- [Project status](#project-status)
+- [Project status and roadmap](#project-status-and-roadmap)
+
+## Highlights
+
+| Area | What's in place |
+|---|---|
+| **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
+| **Testing** | 32 unit tests (JUnit 5 + Mockito) and 11 integration tests on a real PostgreSQL 16 started by Testcontainers, including multi-threaded race tests |
+| **CI** | GitHub Actions builds and runs the full suite on every pull request |
+| **CD** | Multi-stage Docker image published to GitHub Container Registry on every merge to `main`, tagged with the commit SHA |
+| **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; 401s rendered as RFC 7807 |
+| **API contract** | OpenAPI 3 spec and Swagger UI; all errors as RFC 7807 `application/problem+json` |
+| **Observability** | Actuator health, Micrometer business counters, Prometheus scraping, pre-provisioned Grafana dashboard with latency percentiles |
+| **Data** | Schema owned by Flyway migrations; Hibernate runs in `validate` mode only |
 
 ## Why idempotency, specifically
 
 A payment terminal sends `POST /transfers`, the network hiccups, and the
-terminal never sees the response. It doesn't know if the transfer happened —
-so it does the only safe thing: it retries the **exact same request**. If the
-server treats that retry as a brand-new transfer, the customer gets charged
-twice.
+terminal never sees the response. It doesn't know whether the transfer
+happened, so it does the only safe thing: it retries the **exact same
+request**. If the server treats that retry as a brand-new transfer, the
+customer is charged twice.
 
 The fix is a client-supplied `Idempotency-Key` header. The server remembers
 every key it has seen and the result it produced, so a retry doesn't
-re-execute anything — it just gets the original answer back.
+re-execute anything. It gets the original answer back.
 
 ## How a transfer stays safe under retries and races
 
@@ -70,58 +91,72 @@ Three mechanisms work together, each covering a failure mode the others don't:
 
 | Mechanism | Covers |
 |---|---|
-| **Idempotency-key replay** | The common case — client didn't see the response and retries later, after the first request already committed. |
-| **Unique DB constraint + race recovery** | Two requests with the same brand-new key arrive *at the same instant* — both pass the replay check, but only one wins the insert; the loser re-queries and returns the winner's result instead of erroring. |
-| **Optimistic locking (`@Version`) + retry** | Two *different* transfers touch the same account concurrently (e.g. two customers paying into the same merchant account). Each account row is version-checked at commit; a losing transaction reloads fresh balances and retries, up to 3 attempts. |
+| **Idempotency-key replay** | The common case: the client didn't see the response and retries later, after the first request already committed. |
+| **Unique DB constraint + race recovery** | Two requests with the same brand-new key arrive at the same instant. Both pass the replay check, only one wins the insert; the loser re-queries and returns the winner's result instead of an error. |
+| **Optimistic locking (`@Version`) + retry** | Two *different* operations touch the same account concurrently. Each account row is version-checked at commit; the losing transaction reloads fresh balances and retries, up to 3 attempts. |
 
-A key can only be replayed for the **exact same payload** (same accounts, same
-amount). Reusing a key with a different request is rejected with `422` — that
-distinction matters, because silently returning someone else's transfer for a
-mismatched replay would be a much worse bug than no idempotency at all.
+A key can only be replayed for the **exact same payload**. Reusing a key with
+a different request is rejected with `422`, because silently returning
+someone else's result for a mismatched replay would be a worse bug than no
+idempotency at all.
+
+Deposits follow the same rules when an `Idempotency-Key` header is supplied.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph web ["web — controllers"]
+    Client([POS terminal / HTTP client])
+
+    subgraph security ["config — Spring Security"]
+        F["ApiKeyAuthenticationFilter<br/><i>X-API-Key → SHA-256 → terminals</i>"]
+    end
+
+    subgraph web ["web — thin controllers"]
         AC[AccountController]
         TC[TransferController]
     end
 
     subgraph service ["service — business logic"]
-        AS[AccountService]
-        TS["TransferService<br/><i>replay check · retry loop</i>"]
+        AS["AccountService<br/><i>deposit replay · retry loop</i>"]
+        DX["DepositTransactionExecutor<br/><i>@Transactional core</i>"]
+        TS["TransferService<br/><i>replay check · retry loop · metrics</i>"]
         TX["TransferTransactionExecutor<br/><i>@Transactional core</i>"]
     end
 
     subgraph domain ["domain — JPA entities"]
         ACC["Account<br/>balance, currency, @Version"]
         TRF["Transfer<br/>idempotency_key (unique)"]
+        DEP["Deposit<br/>idempotency_key (unique)"]
+        TER["Terminal<br/>api_key_hash"]
     end
 
-    DB[(PostgreSQL)]
+    DB[(PostgreSQL 16<br/>Flyway-managed)]
+    PROM[Prometheus] --> GRAF[Grafana]
 
-    AC --> AS --> ACC
-    TC --> TS --> TX --> ACC
-    TX --> TRF
-    ACC --> DB
-    TRF --> DB
+    Client --> F --> AC & TC
+    AC --> AS --> DX --> ACC & DEP
+    TC --> TS --> TX --> ACC & TRF
+    F --> TER
+    ACC & TRF & DEP & TER --> DB
+    PROM -. scrapes /actuator/prometheus .-> TS
 ```
 
-- **`domain/`** — JPA entities. `Account` owns its own invariants (`debit()`
-  throws rather than letting a service short-circuit a balance check).
-- **`repository/`** — plain Spring Data JPA repositories.
-- **`service/`** — split in two on purpose: `TransferTransactionExecutor` is
-  the `@Transactional` unit of work; `TransferService` orchestrates the
-  replay check and retry loop *around* it, and is deliberately **not**
-  transactional itself — each retry needs its own fresh transaction.
-- **`web/`** — thin controllers: validation and status codes only.
-- **`exception/`** — domain exceptions mapped to
+- **`domain/`**: JPA entities. `Account` owns its invariants (`debit()`
+  throws instead of letting a service skip a balance check).
+- **`service/`**: split in two on purpose. The `*TransactionExecutor` classes
+  are the `@Transactional` unit of work; `TransferService` and `AccountService`
+  orchestrate replay and retry *around* them and are deliberately **not**
+  transactional, because each retry needs its own fresh transaction.
+- **`web/`**: thin controllers, validation and status codes only.
+- **`exception/`**: domain exceptions mapped to
   [RFC 7807](https://www.rfc-editor.org/rfc/rfc9457) `ProblemDetail`
-  responses by a single `@RestControllerAdvice`.
+  responses by one `@RestControllerAdvice`.
+- **`config/`**: security filter chain, API-key hashing, dev-profile terminal
+  seeding, OpenAPI definition.
 
-Schema is owned entirely by Flyway migrations (`src/main/resources/db/migration`);
-Hibernate is `ddl-auto=validate` only — it never generates DDL.
+The schema lives entirely in Flyway migrations
+(`src/main/resources/db/migration`, `V1`–`V3`); Hibernate never generates DDL.
 
 ## API
 
@@ -129,22 +164,19 @@ Hibernate is `ddl-auto=validate` only — it never generates DDL.
 |---|---|---|
 | `POST` | `/accounts` | Open an account |
 | `GET` | `/accounts/{id}` | Get an account |
-| `POST` | `/accounts/{id}/deposit` | Deposit funds (idempotent if an `Idempotency-Key` header is supplied) |
-| `POST` | `/transfers` | Transfer between two accounts (requires `Idempotency-Key` header) |
+| `POST` | `/accounts/{id}/deposit` | Deposit funds (idempotent when an `Idempotency-Key` header is supplied) |
+| `POST` | `/transfers` | Transfer between two accounts (requires `Idempotency-Key`) |
 | `GET` | `/transfers?accountId=&page=` | Paginated transfer history for an account |
 
-Interactive docs: `/swagger-ui.html` (Swagger UI) and `/v3/api-docs` (raw OpenAPI JSON) —
-both public, no `X-API-Key` needed to view them. The `Idempotency-Key` header and the
-`X-API-Key` security scheme are documented on every endpoint that needs them.
+Interactive docs: **`/swagger-ui.html`** (Swagger UI) and **`/v3/api-docs`**
+(OpenAPI JSON). Both are public; the `X-API-Key` scheme and the
+`Idempotency-Key` header are documented on every endpoint that needs them.
 
 <details>
 <summary><strong>curl walkthrough</strong></summary>
 
-Every request needs a per-terminal `X-API-Key` header (see
-[Authentication](#authentication) below); a request without one gets `401`.
-
 ```bash
-API_KEY=dev-local-terminal-key   # seeded automatically when the dev profile is active
+API_KEY=dev-local-terminal-key   # seeded automatically in the dev profile
 
 # open two accounts
 curl -s -X POST localhost:8080/accounts \
@@ -164,14 +196,14 @@ curl -s -X POST localhost:8080/transfers \
   -d '{"fromAccountId":1,"toAccountId":2,"amount":30.00}'
 # -> 201 Created {"id":1,"fromAccountId":1,"toAccountId":2,"amount":30.00,"status":"COMPLETED",...}
 
-# retry the exact same request — same key, same body
+# retry the exact same request: same key, same body
 curl -s -X POST localhost:8080/transfers \
   -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -H "Idempotency-Key: 6c1f6e2a-0000-4c00-8000-000000000001" \
   -d '{"fromAccountId":1,"toAccountId":2,"amount":30.00}'
-# -> 200 OK, same transfer id — Bob was NOT credited twice
+# -> 200 OK, same transfer id; Bob was NOT credited twice
 
-# reuse the key with a different amount — rejected, not silently replayed
+# reuse the key with a different amount: rejected, not replayed
 curl -s -X POST localhost:8080/transfers \
   -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -H "Idempotency-Key: 6c1f6e2a-0000-4c00-8000-000000000001" \
@@ -186,93 +218,200 @@ curl -s "localhost:8080/transfers?accountId=1&page=0&size=20" -H "X-API-Key: $AP
 
 ## Authentication
 
-Every endpoint except `/actuator/health`, `/v3/api-docs/**` and `/swagger-ui/**`
-requires a per-terminal API key in the `X-API-Key` header. Keys are stored as
-SHA-256 hashes in a `terminals` table and checked by a Spring Security filter;
-a missing or unrecognized key gets a `401` RFC 7807 response. Running with the
-`dev` Spring profile active (the default in `docker compose up`, via
-`SPRING_PROFILES_ACTIVE=dev`) seeds one terminal with the key
-`dev-local-terminal-key` on startup — convenient for local curl/README use,
-never enabled outside `dev`. There's no admin API yet for provisioning
-terminals in other environments; insert rows into `terminals` directly for now.
+Every endpoint except `/actuator/health`, `/actuator/prometheus`,
+`/v3/api-docs/**` and `/swagger-ui/**` requires a per-terminal API key in the
+`X-API-Key` header. Keys are stored only as SHA-256 hashes in the `terminals`
+table and checked by a stateless Spring Security filter. A missing or unknown
+key gets a `401` RFC 7807 response.
+
+The `dev` Spring profile (enabled in `docker-compose.yml`) seeds one terminal
+with the key `dev-local-terminal-key`. That seeder never runs outside `dev`.
+In other environments, add a terminal by inserting its name and key hash
+(see [Deploying to a server](#deploying-to-a-server)).
 
 ## Quickstart
 
-```bash
-docker compose up             # builds the app image, starts Postgres + the API
-```
-
-The API is then reachable at `localhost:8080`. The `app` service waits for
-Postgres to report healthy before starting; the datasource is configured via
-`SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD`
-env vars in `docker-compose.yml`, overridable for other environments.
-
-To run the app locally against a `docker compose` Postgres instead (e.g. for
-faster edit/rebuild cycles with `bootRun`):
+Requirements: Docker. Nothing else.
 
 ```bash
-docker compose up -d postgres     # Postgres only
-./gradlew bootRun
+git clone https://github.com/viache25/transfer-api && cd transfer-api
+docker compose up
 ```
 
-The app needs Postgres to start at all — schema is Flyway-managed and
-`ddl-auto=validate`, so there's no in-memory fallback.
+| Service | URL |
+|---|---|
+| API | http://localhost:8080 |
+| Swagger UI | http://localhost:8080/swagger-ui.html |
+| Grafana (dashboard "Transfer API") | http://localhost:3000 |
+| Prometheus | http://localhost:9090 |
+
+Or run the published image instead of building locally (needs a Postgres it
+can reach):
+
+```bash
+docker run -p 8080:8080 \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://<host>:5432/transferapi \
+  -e SPRING_DATASOURCE_USERNAME=transferapi \
+  -e SPRING_DATASOURCE_PASSWORD=transferapi \
+  ghcr.io/viache25/transfer-api:latest
+```
+
+For a fast edit/run loop without rebuilding the image:
+
+```bash
+docker compose up -d postgres
+./gradlew bootRun --args='--spring.profiles.active=dev'
+```
+
+## Testing and quality
+
+```bash
+./gradlew test      # full suite; needs Docker running, nothing else
+./gradlew test --tests "com.slavaslava.transferapi.service.*" \
+               --tests "com.slavaslava.transferapi.domain.*"   # unit tests only, no Docker
+./gradlew build     # compile + all tests + package (what CI runs)
+```
+
+HTML report after a run: `build/reports/tests/test/index.html`.
+
+### Test strategy
+
+The suite follows the test pyramid: many fast, isolated unit tests for every
+branch of the business logic, and fewer integration tests that prove the
+system-level guarantees against a real database.
+
+| Level | Count | Tools | What it proves |
+|---|---|---|---|
+| **Unit** | 32 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants |
+| **Integration** | 11 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
+
+Integration tests start their own disposable PostgreSQL 16 container through
+Testcontainers (`@ServiceConnection`), so they are hermetic: no shared dev
+database, no leftover state, identical behaviour on a laptop and in CI.
+
+### What is covered
+
+**Idempotency**
+- A retried transfer with the same key returns the same transfer and never debits twice
+- A retried deposit with the same key credits exactly once
+- Reusing a key with a different payload is rejected (422) and executes nothing
+- Two requests racing with the same new key: the loser returns the winner's result
+
+**Concurrency**
+- Two threads transferring 80.00 from a 100.00 account at the same instant: exactly one succeeds, the balance never goes negative (threads released together with a `CountDownLatch`)
+- A deposit racing a transfer on the same account completes without a concurrency error
+- Optimistic-lock conflicts are retried and succeed; after 3 failed attempts the error propagates
+
+**Business rules**
+- Insufficient funds, currency mismatch, same-account transfer, missing accounts
+- Debit/credit invariants on the `Account` entity itself
+
+**Security**
+- No API key → 401 ProblemDetail; unknown key → 401; valid key → accepted
+
+**Schema and startup**
+- The application context starts against a Flyway-migrated database with Hibernate in `validate` mode, so any drift between entities and migrations fails the build
+
+## CI/CD pipeline
+
+```mermaid
+flowchart LR
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>43 tests"]
+    CI -->|green| M[Merge to main]
+    M --> CD["CD workflow<br/>multi-stage Docker build"]
+    CD --> R[("ghcr.io/viache25/transfer-api<br/>:latest · :&lt;sha&gt;")]
+    R --> S[Any Docker host]
+```
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit and integration tests, packaging). A red build blocks the merge. |
+| [`cd.yml`](.github/workflows/cd.yml) | Push to `main`, manual | Builds the multi-stage `Dockerfile` (Gradle build stage → slim JRE 21 runtime, non-root user) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. |
 
 ## Monitoring
 
-`docker compose up` also starts Prometheus and Grafana (config under `ops/`):
+`docker compose up` also starts Prometheus and Grafana (configuration under
+`ops/`). Prometheus scrapes `/actuator/prometheus` every 5 seconds; Grafana
+comes with the datasource and a "Transfer API" dashboard already provisioned.
 
-| Service | URL | Notes |
-|---|---|---|
-| API | `localhost:8080` | metrics at `/actuator/prometheus` (public) |
-| Prometheus | `localhost:9090` | scrapes the app every 5s |
-| Grafana | `localhost:3000` | anonymous admin; "Transfer API" dashboard is pre-provisioned |
+| Metric | Meaning |
+|---|---|
+| `transfers_created_count_total` | New transfers executed |
+| `transfers_replayed_total` | Retries answered from a stored result |
+| `transfers_lock_retries_total` | Optimistic-lock conflicts that triggered a retry |
+| `transfers_key_reuse_rejected_total` | Key reused with a different payload (422) |
+| `http_server_requests_seconds_*` | Request rate and p50/p95/p99 latency |
 
-The dashboard shows the transfer counters (`transfers_created_count_total`,
-`transfers_replayed_total`, `transfers_lock_retries_total`,
-`transfers_key_reuse_rejected_total`) plus HTTP request rate and latency percentiles.
+## Deploying to a server
 
-## Testing
+The image from GHCR runs on any Linux host with Docker. For a production-like
+setup, start from `docker-compose.yml` and change four things:
+
+1. Use `image: ghcr.io/viache25/transfer-api:latest` instead of `build: .`
+2. Remove `SPRING_PROFILES_ACTIVE=dev` so no well-known dev key is seeded
+3. Move database passwords into an `.env` file and stop publishing port 5432
+4. Disable Grafana's anonymous admin access
+
+Then create a terminal key:
 
 ```bash
-./gradlew test --tests "com.slavaslava.transferapi.service.*" \
-                --tests "com.slavaslava.transferapi.domain.*"   # unit tests, no DB needed
-
-docker compose up -d postgres
-./gradlew test                                                  # full suite, incl. integration tests
+KEY=$(openssl rand -hex 24); echo "API key: $KEY"
+HASH=$(printf %s "$KEY" | sha256sum | cut -d' ' -f1)
+docker compose exec postgres psql -U transferapi -c \
+  "INSERT INTO terminals(name, api_key_hash, created_at) VALUES ('terminal-1', '$HASH', now());"
 ```
 
-- **Unit tests** (JUnit 5 + Mockito) cover the service layer in isolation:
-  replay/retry/race branches of `TransferService`, the debit/credit/validation
-  rules in `TransferTransactionExecutor`, and `Account`'s own invariants.
-- **Integration tests** (`@SpringBootTest`, real Postgres) prove the two
-  claims that actually matter for this project: retrying `POST /transfers`
-  with the same key never double-debits, and two threads racing a transfer
-  against the same account never overdraw or double-spend it.
+Put a TLS-terminating reverse proxy (for example Caddy) in front of port 8080.
+Updating to a new version is `docker compose pull && docker compose up -d`.
+
+## Repository layout
+
+```
+.github/workflows/   CI and CD pipelines
+src/main/java/...    web · service · domain · repository · dto · exception · config
+src/main/resources/  application.properties, Flyway migrations (V1–V3)
+src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
+ops/                 Prometheus scrape config, Grafana provisioning and dashboard
+Dockerfile           multi-stage build → JRE 21 runtime, non-root
+docker-compose.yml   app + PostgreSQL + Prometheus + Grafana
+CLAUDE.md            implementation notes and stack-specific gotchas
+```
 
 ## Tech stack
 
-Java 21 · Spring Boot 4 · Gradle · PostgreSQL + Flyway · Spring Security ·
-JUnit 5 + Mockito · Docker Compose · GitHub Actions · springdoc-openapi
+**Application:** Java 21 · Spring Boot 4.1 / Spring Framework 7 · Spring Data
+JPA / Hibernate 7 · Spring Security · Jackson 3 · Bean Validation
 
-## Project status
+**Data:** PostgreSQL 16 · Flyway
 
-**Phase 1 — core**
+**Testing:** JUnit 5 · Mockito · AssertJ · MockMvc · Testcontainers ·
+Spring Security Test
+
+**Delivery:** Gradle (Kotlin DSL) · Docker (multi-stage) · Docker Compose ·
+GitHub Actions · GitHub Container Registry
+
+**API and observability:** OpenAPI 3 / springdoc · RFC 7807 · Spring Boot
+Actuator · Micrometer · Prometheus · Grafana
+
+## Project status and roadmap
+
+**Done**
 - [x] Accounts, transfers, deposits, paginated history
-- [x] Idempotency-key replay with payload match check
-- [x] Optimistic locking with retry on concurrent transfers
+- [x] Idempotent transfers and deposits with payload-match check
+- [x] Optimistic locking with retry; DB-level race recovery
 - [x] RFC 7807 error responses
-- [x] Unit tests (Mockito) + integration tests (idempotency, concurrency)
-- [x] Dockerfile + full docker-compose (app + Postgres)
-- [x] GitHub Actions CI running the full suite on every push
-- [x] OpenAPI UI (springdoc)
-- [x] Prometheus + Grafana dashboard in docker compose
+- [x] Unit tests + Testcontainers integration tests (idempotency, concurrency, security)
+- [x] Per-terminal API-key authentication (Spring Security)
+- [x] OpenAPI spec + Swagger UI
+- [x] Dockerfile + full Docker Compose stack
+- [x] CI on GitHub Actions; CD to GitHub Container Registry
+- [x] Actuator, custom metrics, Prometheus + Grafana dashboard
 
-**Phase 2 — extensions** (after phase 1 ships): Redis idempotency cache +
-rate limiting, Spring Security, Actuator/Prometheus/Grafana, Testcontainers.
+**Next**
+- [ ] Redis read-through cache for idempotency lookups (DB stays source of truth)
+- [ ] Per-terminal rate limiting (Bucket4j, 429 with `Retry-After`)
+- [ ] C client simulating a POS terminal (libcurl) that retries with the same key
+- [ ] End-to-end test in CI: the client drops a response on purpose, and the test asserts the balance moved exactly once
 
-**Phase 3**: a C client simulating a POS terminal — HTTP retries reusing the
-same idempotency key end-to-end.
-
-See [`CLAUDE.md`](CLAUDE.md) for implementation-level notes (known gaps,
-stack-specific gotchas).
+Out of scope by design: message brokers, microservices, a frontend,
+Kubernetes, currency conversion.
