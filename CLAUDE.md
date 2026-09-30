@@ -26,6 +26,8 @@ The step-by-step plan and its design decisions (D1, D2, …) live in GitHub Issu
 ./gradlew bootRun               # run the app locally (needs Postgres — see below)
 ```
 
+`check` (so also `build` and CI) includes `jacocoTestCoverageVerification`: line coverage must stay ≥ 85% and branch coverage ≥ 80% (measured 88% / 84% when the gate was added). New code without tests can fail the build on coverage alone. Reports: `build/reports/jacoco/test/html/index.html`. CI (`.github/workflows/ci.yml`) runs on PRs and pushes to `main`, has no Postgres service (Testcontainers uses the runner's Docker), publishes JUnit results via `dorny/test-reporter` and uploads `build/reports/` as artifacts.
+
 Windows: use `gradlew.bat` instead of `./gradlew` from PowerShell/cmd.
 
 **Windows/Gradle gotcha on this machine**: the default `GRADLE_USER_HOME` (`C:\Users\<user>\.gradle`) contains Cyrillic characters, which breaks the forked test-worker JVM (`Could not find or load main class worker.org.gradle.process.internal.worker.GradleWorkerMain` — a JAR-manifest Class-Path encoding bug with non-ASCII paths). Work around it by pointing Gradle at an ASCII-only cache dir: `./gradlew test -g "D:/gradle-user-home"`. Only `test` (forked JVM workers) is affected; `compileJava`/`compileTestJava` work fine without the flag.
