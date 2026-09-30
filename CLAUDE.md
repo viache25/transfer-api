@@ -13,6 +13,8 @@ The project is being built in three phases; check `git log` / current code state
 
 Explicitly out of scope: Kafka/RabbitMQ, microservices, a frontend, Kubernetes, multi-currency conversion, a custom auth server.
 
+The step-by-step plan and its design decisions (D1, D2, …) live in GitHub Issue #1. Work happens in branches with one PR per change, merged only after CI is green; never push to `main` directly.
+
 ## Commands
 
 ```bash
