@@ -28,6 +28,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("org.springframework.boot:spring-boot-flyway")
     implementation("io.micrometer:micrometer-registry-prometheus")
+    implementation("com.bucket4j:bucket4j_jdk17-core:8.20.0")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
