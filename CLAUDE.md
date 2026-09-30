@@ -36,7 +36,7 @@ The app needs a running Postgres to start (JPA `ddl-auto=validate`, schema owned
 docker compose up -d postgres
 ```
 
-`docker-compose.yml` currently only defines the `postgres` service for local dev; an `app` service + `Dockerfile` are planned for the packaging phase, not added yet.
+`docker compose up` starts the full stack: `postgres`, `app` (built from the multi-stage `Dockerfile`, `dev` profile), `prometheus` and `grafana`. For a fast edit/run loop, start only `postgres` and run the app with `bootRun`.
 
 ## Architecture
 
