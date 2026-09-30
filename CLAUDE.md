@@ -9,7 +9,7 @@ A REST API for account-to-account money transfers (Java 21, Spring Boot 4, Postg
 The project is being built in three phases; check `git log` / current code state to see how far it's gotten before assuming a feature exists:
 - **Phase 1 (core)** — skeleton entities/endpoints → idempotency + optimistic-lock retry + concurrency tests → Dockerfile/CI/README packaging.
 - **Phase 2 (extensions)** — Redis idempotency cache + rate limiting, Spring Security, Actuator/Prometheus/Grafana, Testcontainers. Only after phase 1 ships.
-- **Phase 3** — a C client simulating a POS terminal (HTTP retries reusing the same idempotency key). Only after phase 1 gets interview traction.
+- **Phase 3** — a C client simulating a POS terminal (HTTP retries reusing the same idempotency key). Only after phase 1 gets interview traction. Per D8 in issue #1 the C client is replaced by a Java + Toxiproxy network-failure test (plan step 20); the plan now also covers REST Assured/PIT/k6/Playwright steps 17-24.
 
 Explicitly out of scope: Kafka/RabbitMQ, microservices, a frontend, Kubernetes, multi-currency conversion, a custom auth server.
 

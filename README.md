@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
   <img src="https://img.shields.io/badge/tests-60%20automated-25A162?logo=junit5&logoColor=white" alt="60 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
-  <img src="https://img.shields.io/badge/status-in%20progress-yellow" alt="Status: in progress">
+  <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
 
 A REST API for account-to-account money transfers, built as a complete,
@@ -126,6 +126,7 @@ flowchart TB
         DX["DepositTransactionExecutor<br/><i>@Transactional core</i>"]
         TS["TransferService<br/><i>replay check · retry loop · metrics</i>"]
         TX["TransferTransactionExecutor<br/><i>@Transactional core</i>"]
+        RC["TransferReplayCache<br/><i>read-through, 24h TTL</i>"]
     end
 
     subgraph domain ["domain — JPA entities"]
@@ -136,15 +137,21 @@ flowchart TB
     end
 
     DB[(PostgreSQL 16<br/>Flyway-managed)]
+    REDIS[(Redis 7<br/>optional cache)]
     PROM[Prometheus] --> GRAF[Grafana]
 
     Client --> F --> AC & TC
     AC --> AS --> DX --> ACC & DEP
     TC --> TS --> TX --> ACC & TRF
+    TS --> RC -.-> REDIS
     F --> TER
     ACC & TRF & DEP & TER --> DB
     PROM -. scrapes /actuator/prometheus .-> TS
 ```
+
+The POS terminal on the left is a conceptual client: the retry behaviour it
+would show on a flaky network is exercised by the test suite (see the roadmap
+for the network-failure test that is still planned).
 
 - **`domain/`**: JPA entities. `Account` owns its invariants (`debit()`
   throws instead of letting a service skip a balance check).
@@ -158,6 +165,9 @@ flowchart TB
   responses by one `@RestControllerAdvice`.
 - **`config/`**: security filter chain, API-key hashing, dev-profile terminal
   seeding, per-terminal rate limiting, OpenAPI definition.
+- **Redis**: `TransferReplayCache` answers transfer replays before the
+  database is queried. It is an optimisation only; any Redis error falls back
+  to PostgreSQL.
 
 The schema lives entirely in Flyway migrations
 (`src/main/resources/db/migration`, `V1`–`V3`); Hibernate never generates DDL.
@@ -399,7 +409,7 @@ src/main/resources/  application.properties, Flyway migrations (V1–V3)
 src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
 ops/                 Prometheus scrape config, Grafana provisioning and dashboard
 Dockerfile           multi-stage build → JRE 21 runtime, non-root
-docker-compose.yml   app + PostgreSQL + Prometheus + Grafana
+docker-compose.yml   app + PostgreSQL + Redis + Prometheus + Grafana
 CLAUDE.md            implementation notes and stack-specific gotchas
 ```
 
@@ -435,9 +445,19 @@ Actuator · Micrometer · Prometheus · Grafana
 - [x] Redis read-through cache for transfer idempotency lookups (DB stays source of truth)
 - [x] Per-terminal rate limiting (Bucket4j, 20 req/s, 429 with `Retry-After`)
 
+**Phases**
+- Phase 1 (core: idempotency, optimistic-lock retry, concurrency tests, Docker, CI/CD): done
+- Phase 2 (security, Testcontainers, observability, Redis cache, rate limiting): done
+- Phase 3 (POS-terminal client): the C client was replaced by a Java network-failure test (Toxiproxy), see below
+
 **Next**
-- [ ] C client simulating a POS terminal (libcurl) that retries with the same key
-- [ ] End-to-end test in CI: the client drops a response on purpose, and the test asserts the balance moved exactly once
+- [ ] Exact replay bodies and fixed two-decimal money scale
+- [ ] REST Assured API tests with an OpenAPI contract check
+- [ ] Mutation testing with PIT
+- [ ] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry must return the same transfer
+- [ ] k6 load test with deliberate same-key retries
+- [ ] A single server-rendered test-target page and Playwright UI tests
+- [ ] Ephemeral-environment smoke test against the published image
 
 Out of scope by design: message brokers, microservices, a frontend,
 Kubernetes, currency conversion.
