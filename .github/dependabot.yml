@@ -24,3 +24,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The JDK major version is pinned by the Gradle toolchain (21); move it deliberately.
+      - dependency-name: eclipse-temurin
+        update-types: [version-update:semver-major]
