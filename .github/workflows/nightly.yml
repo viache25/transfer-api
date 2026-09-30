@@ -1,0 +1,42 @@
+name: Nightly
+
+# Full build every night with no Gradle task cache hits, even when nothing was
+# pushed: surfaces flaky tests (especially the concurrency ones) and drift from
+# the outside world (new base images, a Maven Central or Testcontainers change).
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true   # don't let nightly runs overwrite the CI cache
+
+      - name: Build and test from scratch
+        run: |
+          chmod +x gradlew
+          ./gradlew build --rerun-tasks --no-daemon
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-reports
+          path: |
+            build/reports/tests/
+            build/reports/jacoco/
+          retention-days: 14
