@@ -23,14 +23,14 @@ jobs:
     # No Postgres service: integration tests start their own PostgreSQL 16
     # through Testcontainers, using the runner's Docker daemon.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Build, test and verify coverage
         run: |
@@ -51,7 +51,7 @@ jobs:
 
       - name: Publish test results
         if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         with:
           name: JUnit results
           path: build/test-results/test/*.xml
@@ -60,7 +60,7 @@ jobs:
 
       - name: Upload test and coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reports
           path: |
