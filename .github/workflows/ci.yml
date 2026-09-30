@@ -1,29 +1,27 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+# A newer push to the same branch/PR cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write        # dorny/test-reporter publishes a check run with the JUnit results
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: transferapi
-          POSTGRES_USER: transferapi
-          POSTGRES_PASSWORD: transferapi
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-
+    # No Postgres service: integration tests start their own PostgreSQL 16
+    # through Testcontainers, using the runner's Docker daemon.
     steps:
       - uses: actions/checkout@v5
 
@@ -34,7 +32,38 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build and test
+      - name: Build, test and verify coverage
         run: |
           chmod +x gradlew
           ./gradlew build --no-daemon
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
+          import re
+          x = open('build/reports/jacoco/test/jacocoTestReport.xml').read()
+          print('### Coverage\n\n| Counter | Covered |\n|---|---|')
+          for t in ('LINE', 'BRANCH'):
+              missed, covered = map(int, re.findall(r'<counter type="%s" missed="(\d+)" covered="(\d+)"/>' % t, x)[-1])
+              print(f'| {t.lower()} | {covered / (missed + covered):.1%} |')
+          PY
+
+      - name: Publish test results
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: dorny/test-reporter@v2
+        with:
+          name: JUnit results
+          path: build/test-results/test/*.xml
+          reporter: java-junit
+          use-actions-summary: false   # create a check run on the PR instead of only a job summary
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            build/reports/tests/
+            build/reports/jacoco/
+          retention-days: 14

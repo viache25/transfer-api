@@ -44,7 +44,7 @@ project, and the test suite is built to prove it.
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
 | **Testing** | 32 unit tests (JUnit 5 + Mockito) and 11 integration tests on a real PostgreSQL 16 started by Testcontainers, including multi-threaded race tests |
-| **CI** | GitHub Actions builds and runs the full suite on every pull request |
+| **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR |
 | **CD** | Multi-stage Docker image published to GitHub Container Registry on every merge to `main`, tagged with the commit SHA |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; 401s rendered as RFC 7807 |
 | **API contract** | OpenAPI 3 spec and Swagger UI; all errors as RFC 7807 `application/problem+json` |
@@ -272,7 +272,16 @@ docker compose up -d postgres
 ./gradlew build     # compile + all tests + package (what CI runs)
 ```
 
-HTML report after a run: `build/reports/tests/test/index.html`.
+HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
+`build/reports/jacoco/test/html/index.html` (coverage).
+
+### Coverage gate
+
+JaCoCo measures coverage on every test run. `./gradlew check` (and therefore
+`build` and CI) fails if line coverage drops below **85%** or branch coverage
+below **80%**. Current values: line 88%, branch 84%. The floors sit a few
+points below the measured values so a small refactor doesn't break the build,
+but a feature merged without tests does.
 
 ### Test strategy
 
@@ -316,7 +325,7 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>43 tests"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>43 tests · coverage gate"]
     CI -->|green| M[Merge to main]
     M --> CD["CD workflow<br/>multi-stage Docker build"]
     CD --> R[("ghcr.io/viache25/transfer-api<br/>:latest · :&lt;sha&gt;")]
@@ -325,7 +334,7 @@ flowchart LR
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit and integration tests, packaging). A red build blocks the merge. |
+| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit and integration tests, coverage gate, packaging). Publishes JUnit results as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A newer push cancels the superseded run. A red build blocks the merge. |
 | [`cd.yml`](.github/workflows/cd.yml) | Push to `main`, manual | Builds the multi-stage `Dockerfile` (Gradle build stage → slim JRE 21 runtime, non-root user) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. |
 
 ## Monitoring
@@ -385,7 +394,7 @@ JPA / Hibernate 7 · Spring Security · Jackson 3 · Bean Validation
 **Data:** PostgreSQL 16 · Flyway
 
 **Testing:** JUnit 5 · Mockito · AssertJ · MockMvc · Testcontainers ·
-Spring Security Test
+Spring Security Test · JaCoCo
 
 **Delivery:** Gradle (Kotlin DSL) · Docker (multi-stage) · Docker Compose ·
 GitHub Actions · GitHub Container Registry
