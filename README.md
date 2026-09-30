@@ -3,6 +3,7 @@
 <p>
   <a href="https://github.com/viache25/transfer-api/actions/workflows/ci.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/viache25/transfer-api/actions/workflows/cd.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/cd.yml/badge.svg" alt="CD"></a>
+  <a href="https://github.com/viache25/transfer-api/actions/workflows/nightly.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/nightly.yml/badge.svg" alt="Nightly"></a>
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
@@ -339,6 +340,7 @@ flowchart LR
 | [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit and integration tests, coverage gate, packaging). Publishes JUnit results as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A newer push cancels the superseded run. A red build blocks the merge. |
 | [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle build stage → slim JRE 21 runtime, non-root user) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A red CI run on `main` never produces an image. |
 | [`dependabot.yml`](.github/dependabot.yml) | Weekly | Opens update PRs for Gradle dependencies (minor/patch grouped into one PR), GitHub Actions versions and the Dockerfile base images. Each PR goes through the same CI gate, so an update that breaks a test or drops coverage can't be merged. |
+| [`nightly.yml`](.github/workflows/nightly.yml) | Daily 02:00 UTC, manual | Full `./gradlew build --rerun-tasks` with no task-cache hits, even when nothing was pushed. Catches flaky tests (the concurrency tests run every night, not only when code changes) and drift from outside the repo: new base images, dependency or Testcontainers changes. |
 
 ## Monitoring
 
