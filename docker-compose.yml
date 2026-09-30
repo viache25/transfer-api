@@ -15,15 +15,28 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   app:
     build: .
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/transferapi
       SPRING_DATASOURCE_USERNAME: transferapi
       SPRING_DATASOURCE_PASSWORD: transferapi
+      SPRING_DATA_REDIS_HOST: redis
       SPRING_PROFILES_ACTIVE: dev
     ports:
       - "8080:8080"

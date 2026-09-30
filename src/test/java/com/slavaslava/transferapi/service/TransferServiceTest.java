@@ -4,6 +4,7 @@ import com.slavaslava.transferapi.domain.Transfer;
 import com.slavaslava.transferapi.domain.TransferStatus;
 import com.slavaslava.transferapi.dto.CreateTransferRequest;
 import com.slavaslava.transferapi.dto.TransferCreationResult;
+import com.slavaslava.transferapi.dto.TransferResponse;
 import com.slavaslava.transferapi.exception.IdempotencyKeyReuseException;
 import com.slavaslava.transferapi.repository.TransferRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -23,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,6 +38,9 @@ class TransferServiceTest {
     @Mock
     private TransferTransactionExecutor transactionExecutor;
 
+    @Mock
+    private TransferReplayCache replayCache;
+
     private TransferService transferService;
     private SimpleMeterRegistry meterRegistry;
 
@@ -44,7 +49,7 @@ class TransferServiceTest {
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
-        transferService = new TransferService(transferRepository, transactionExecutor, meterRegistry);
+        transferService = new TransferService(transferRepository, transactionExecutor, replayCache, meterRegistry);
     }
 
     private double counter(String name) {
@@ -62,6 +67,40 @@ class TransferServiceTest {
         verify(transactionExecutor, never()).execute(any(), any());
         assertThat(counter("transfers.replayed")).isEqualTo(1.0);
         assertThat(counter("transfers.created.count")).isEqualTo(0.0);
+    }
+
+    @Test
+    void replaysFromCacheWithoutTouchingDatabase() {
+        when(replayCache.find("key-1")).thenReturn(Optional.of(TransferResponse.from(transfer(1L, "10.00"))));
+
+        TransferCreationResult result = transferService.createTransfer(request, "key-1");
+
+        assertThat(result.transfer().id()).isEqualTo(1L);
+        assertThat(result.replayed()).isTrue();
+        verifyNoInteractions(transferRepository, transactionExecutor);
+        assertThat(counter("transfers.replayed")).isEqualTo(1.0);
+    }
+
+    @Test
+    void rejectsKeyReuseWithDifferentPayloadFoundInCache() {
+        when(replayCache.find("key-1")).thenReturn(Optional.of(TransferResponse.from(transfer(1L, "99.00"))));
+
+        assertThatThrownBy(() -> transferService.createTransfer(request, "key-1"))
+                .isInstanceOf(IdempotencyKeyReuseException.class);
+        verifyNoInteractions(transferRepository, transactionExecutor);
+        assertThat(counter("transfers.key_reuse_rejected")).isEqualTo(1.0);
+    }
+
+    @Test
+    void warmsCacheAfterDatabaseReplayAndAfterCreation() {
+        when(transferRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.of(transfer(1L, "10.00")));
+        transferService.createTransfer(request, "key-1");
+        verify(replayCache).put(org.mockito.ArgumentMatchers.eq("key-1"), any(TransferResponse.class));
+
+        when(transferRepository.findByIdempotencyKey("key-2")).thenReturn(Optional.empty());
+        when(transactionExecutor.execute(request, "key-2")).thenReturn(transfer(2L, "10.00"));
+        transferService.createTransfer(request, "key-2");
+        verify(replayCache).put(org.mockito.ArgumentMatchers.eq("key-2"), any(TransferResponse.class));
     }
 
     @Test

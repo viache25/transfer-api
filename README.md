@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-43%20automated-25A162?logo=junit5&logoColor=white" alt="43 automated tests">
+  <img src="https://img.shields.io/badge/tests-53%20automated-25A162?logo=junit5&logoColor=white" alt="53 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-in%20progress-yellow" alt="Status: in progress">
 </p>
@@ -44,13 +44,14 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 32 unit tests (JUnit 5 + Mockito) and 11 integration tests on a real PostgreSQL 16 started by Testcontainers, including multi-threaded race tests |
+| **Testing** | 40 unit tests (JUnit 5 + Mockito) and 13 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers, including multi-threaded race tests |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; 401s rendered as RFC 7807 |
 | **API contract** | OpenAPI 3 spec and Swagger UI; all errors as RFC 7807 `application/problem+json` |
 | **Observability** | Actuator health, Micrometer business counters, Prometheus scraping, pre-provisioned Grafana dashboard with latency percentiles |
 | **Data** | Schema owned by Flyway migrations; Hibernate runs in `validate` mode only |
+| **Caching** | Redis read-through cache (24h TTL) in front of the transfer idempotency lookup; the database stays the source of truth and any Redis failure silently falls back to it |
 
 ## Why idempotency, specifically
 
@@ -245,22 +246,24 @@ docker compose up
 | Swagger UI | http://localhost:8080/swagger-ui.html |
 | Grafana (dashboard "Transfer API") | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
+| Redis (idempotency cache) | localhost:6379 |
 
 Or run the published image instead of building locally (needs a Postgres it
-can reach):
+can reach; Redis is optional, the app falls back to the database without it):
 
 ```bash
 docker run -p 8080:8080 \
   -e SPRING_DATASOURCE_URL=jdbc:postgresql://<host>:5432/transferapi \
   -e SPRING_DATASOURCE_USERNAME=transferapi \
   -e SPRING_DATASOURCE_PASSWORD=transferapi \
+  -e SPRING_DATA_REDIS_HOST=<redis-host> \
   ghcr.io/viache25/transfer-api:latest
 ```
 
 For a fast edit/run loop without rebuilding the image:
 
 ```bash
-docker compose up -d postgres
+docker compose up -d postgres redis
 ./gradlew bootRun --args='--spring.profiles.active=dev'
 ```
 
@@ -292,10 +295,10 @@ system-level guarantees against a real database.
 
 | Level | Count | Tools | What it proves |
 |---|---|---|---|
-| **Unit** | 32 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants |
-| **Integration** | 11 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
+| **Unit** | 40 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants |
+| **Integration** | 13 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
 
-Integration tests start their own disposable PostgreSQL 16 container through
+Integration tests start their own disposable PostgreSQL 16 and Redis 7 containers through
 Testcontainers (`@ServiceConnection`), so they are hermetic: no shared dev
 database, no leftover state, identical behaviour on a laptop and in CI.
 
@@ -326,7 +329,7 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>43 tests · coverage gate"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>53 tests · coverage gate"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -396,7 +399,7 @@ CLAUDE.md            implementation notes and stack-specific gotchas
 **Application:** Java 21 · Spring Boot 4.1 / Spring Framework 7 · Spring Data
 JPA / Hibernate 7 · Spring Security · Jackson 3 · Bean Validation
 
-**Data:** PostgreSQL 16 · Flyway
+**Data:** PostgreSQL 16 · Flyway · Redis 7 (Spring Data Redis / Lettuce)
 
 **Testing:** JUnit 5 · Mockito · AssertJ · MockMvc · Testcontainers ·
 Spring Security Test · JaCoCo
@@ -420,9 +423,9 @@ Actuator · Micrometer · Prometheus · Grafana
 - [x] Dockerfile + full Docker Compose stack
 - [x] CI on GitHub Actions; CD to GitHub Container Registry
 - [x] Actuator, custom metrics, Prometheus + Grafana dashboard
+- [x] Redis read-through cache for transfer idempotency lookups (DB stays source of truth)
 
 **Next**
-- [ ] Redis read-through cache for idempotency lookups (DB stays source of truth)
 - [ ] Per-terminal rate limiting (Bucket4j, 429 with `Retry-After`)
 - [ ] C client simulating a POS terminal (libcurl) that retries with the same key
 - [ ] End-to-end test in CI: the client drops a response on purpose, and the test asserts the balance moved exactly once
