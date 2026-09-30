@@ -45,7 +45,7 @@ project, and the test suite is built to prove it.
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
 | **Testing** | 32 unit tests (JUnit 5 + Mockito) and 11 integration tests on a real PostgreSQL 16 started by Testcontainers, including multi-threaded race tests |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR |
-| **CD** | Multi-stage Docker image published to GitHub Container Registry on every merge to `main`, tagged with the commit SHA |
+| **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; 401s rendered as RFC 7807 |
 | **API contract** | OpenAPI 3 spec and Swagger UI; all errors as RFC 7807 `application/problem+json` |
 | **Observability** | Actuator health, Micrometer business counters, Prometheus scraping, pre-provisioned Grafana dashboard with latency percentiles |
@@ -327,15 +327,17 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 flowchart LR
     PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>43 tests · coverage gate"]
     CI -->|green| M[Merge to main]
-    M --> CD["CD workflow<br/>multi-stage Docker build"]
+    M --> CI2["CI on main"]
+    CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
     CD --> R[("ghcr.io/viache25/transfer-api<br/>:latest · :&lt;sha&gt;")]
+    CD --> T["Trivy scan<br/>→ Security tab"]
     R --> S[Any Docker host]
 ```
 
 | Workflow | Trigger | What it does |
 |---|---|---|
 | [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit and integration tests, coverage gate, packaging). Publishes JUnit results as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A newer push cancels the superseded run. A red build blocks the merge. |
-| [`cd.yml`](.github/workflows/cd.yml) | Push to `main`, manual | Builds the multi-stage `Dockerfile` (Gradle build stage → slim JRE 21 runtime, non-root user) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. |
+| [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle build stage → slim JRE 21 runtime, non-root user) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A red CI run on `main` never produces an image. |
 
 ## Monitoring
 
@@ -397,7 +399,7 @@ JPA / Hibernate 7 · Spring Security · Jackson 3 · Bean Validation
 Spring Security Test · JaCoCo
 
 **Delivery:** Gradle (Kotlin DSL) · Docker (multi-stage) · Docker Compose ·
-GitHub Actions · GitHub Container Registry
+GitHub Actions · GitHub Container Registry · Trivy
 
 **API and observability:** OpenAPI 3 / springdoc · RFC 7807 · Spring Boot
 Actuator · Micrometer · Prometheus · Grafana

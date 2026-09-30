@@ -26,7 +26,7 @@ The step-by-step plan and its design decisions (D1, D2, …) live in GitHub Issu
 ./gradlew bootRun               # run the app locally (needs Postgres — see below)
 ```
 
-`check` (so also `build` and CI) includes `jacocoTestCoverageVerification`: line coverage must stay ≥ 85% and branch coverage ≥ 80% (measured 88% / 84% when the gate was added). New code without tests can fail the build on coverage alone. Reports: `build/reports/jacoco/test/html/index.html`. CI (`.github/workflows/ci.yml`) runs on PRs and pushes to `main`, has no Postgres service (Testcontainers uses the runner's Docker), publishes JUnit results via `dorny/test-reporter` and uploads `build/reports/` as artifacts.
+`check` (so also `build` and CI) includes `jacocoTestCoverageVerification`: line coverage must stay ≥ 85% and branch coverage ≥ 80% (measured 88% / 84% when the gate was added). New code without tests can fail the build on coverage alone. Reports: `build/reports/jacoco/test/html/index.html`. CI (`.github/workflows/ci.yml`) runs on PRs and pushes to `main`, has no Postgres service (Testcontainers uses the runner's Docker), publishes JUnit results via `dorny/test-reporter` and uploads `build/reports/` as artifacts. CD (`.github/workflows/cd.yml`) is triggered by `workflow_run` of `CI` on `main` and only runs when that CI run succeeded; it checks out `workflow_run.head_sha` (the tested commit), pushes the image to GHCR, then runs a report-only Trivy scan (SARIF → Security tab). Because of `workflow_run`, edits to `cd.yml` only take effect once merged to `main` — a PR cannot exercise them.
 
 Windows: use `gradlew.bat` instead of `./gradlew` from PowerShell/cmd.
 
