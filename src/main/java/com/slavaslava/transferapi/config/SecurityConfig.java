@@ -7,6 +7,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 public class SecurityConfig {
@@ -21,7 +22,8 @@ public class SecurityConfig {
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, TerminalRepository terminalRepository,
-                                             RestAuthenticationEntryPoint entryPoint) throws Exception {
+                                             RestAuthenticationEntryPoint entryPoint,
+                                             TerminalRateLimiter rateLimiter, ObjectMapper objectMapper) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -31,7 +33,8 @@ public class SecurityConfig {
                         .requestMatchers(PUBLIC_PATHS).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(handling -> handling.authenticationEntryPoint(entryPoint))
-                .addFilterBefore(new ApiKeyAuthenticationFilter(terminalRepository), UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(new ApiKeyAuthenticationFilter(terminalRepository), UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new RateLimitFilter(rateLimiter, objectMapper), ApiKeyAuthenticationFilter.class);
         return http.build();
     }
 }
