@@ -187,7 +187,7 @@ curl -s -X POST localhost:8080/accounts \
 curl -s -X POST localhost:8080/accounts \
   -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -d '{"owner":"Bob","initialBalance":0,"currency":"EUR"}'
-# -> {"id":2,"owner":"Bob","balance":0.00,"currency":"EUR"}
+# -> {"id":2,"owner":"Bob","balance":0,"currency":"EUR"}
 
 # transfer 30.00 from Alice to Bob
 curl -s -X POST localhost:8080/transfers \
