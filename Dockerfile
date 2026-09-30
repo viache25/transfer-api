@@ -1,5 +1,5 @@
 # ---- Build stage ----
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /workspace
 
 COPY gradlew ./
@@ -11,7 +11,7 @@ COPY src ./src
 RUN chmod +x gradlew && ./gradlew build --no-daemon -x test
 
 # ---- Runtime stage ----
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 
 RUN useradd --system --create-home --shell /usr/sbin/nologin appuser
