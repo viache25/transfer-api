@@ -9,6 +9,7 @@ import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 @Entity
 @Table(name = "deposits")
@@ -37,7 +38,7 @@ public class Deposit {
         this.accountId = accountId;
         this.amount = amount;
         this.idempotencyKey = idempotencyKey;
-        this.createdAt = Instant.now();
+        this.createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
     }
 
     public Long getId() {

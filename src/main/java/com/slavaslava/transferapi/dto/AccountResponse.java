@@ -10,6 +10,10 @@ public record AccountResponse(
         BigDecimal balance,
         String currency
 ) {
+    public AccountResponse {
+        balance = Money.scaled(balance);
+    }
+
     public static AccountResponse from(Account account) {
         return new AccountResponse(account.getId(), account.getOwner(), account.getBalance(), account.getCurrency());
     }
