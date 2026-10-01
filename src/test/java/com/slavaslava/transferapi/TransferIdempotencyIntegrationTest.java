@@ -24,7 +24,11 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
@@ -116,5 +120,36 @@ class TransferIdempotencyIntegrationTest {
 
         assertThat(accountRepository.findById(fromId).orElseThrow().getBalance()).isEqualByComparingTo("70.00");
         assertThat(transferRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void replayReturnsByteIdenticalBodyAndAmountsKeepTwoDecimals() throws Exception {
+        String idempotencyKey = UUID.randomUUID().toString();
+        String body = "{\"fromAccountId\":" + fromId + ",\"toAccountId\":" + toId + ",\"amount\":100}";
+
+        MvcResult first = mockMvc.perform(post("/transfers")
+                        .header("Idempotency-Key", idempotencyKey)
+                        .header("X-API-Key", API_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.amount").value(100.00))
+                .andReturn();
+
+        MvcResult replay = mockMvc.perform(post("/transfers")
+                        .header("Idempotency-Key", idempotencyKey)
+                        .header("X-API-Key", API_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String firstBody = first.getResponse().getContentAsString();
+        assertThat(replay.getResponse().getContentAsString()).isEqualTo(firstBody);
+        assertThat(firstBody).contains("\"amount\":100.00");
+
+        mockMvc.perform(get("/accounts/" + fromId).header("X-API-Key", API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"balance\":0.00")));
     }
 }

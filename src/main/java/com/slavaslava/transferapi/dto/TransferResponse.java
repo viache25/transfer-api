@@ -14,6 +14,10 @@ public record TransferResponse(
         String idempotencyKey,
         Instant createdAt
 ) {
+    public TransferResponse {
+        amount = Money.scaled(amount);
+    }
+
     public static TransferResponse from(Transfer transfer) {
         return new TransferResponse(
                 transfer.getId(),

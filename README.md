@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-60%20automated-25A162?logo=junit5&logoColor=white" alt="60 automated tests">
+  <img src="https://img.shields.io/badge/tests-65%20automated-25A162?logo=junit5&logoColor=white" alt="65 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
@@ -44,7 +44,7 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 45 unit tests (JUnit 5 + Mockito) and 15 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers, including multi-threaded race tests |
+| **Testing** | 49 unit tests (JUnit 5 + Mockito) and 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers, including multi-threaded race tests |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
@@ -313,8 +313,8 @@ system-level guarantees against a real database.
 
 | Level | Count | Tools | What it proves |
 |---|---|---|---|
-| **Unit** | 45 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants |
-| **Integration** | 15 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
+| **Unit** | 49 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants |
+| **Integration** | 16 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
 
 Integration tests start their own disposable PostgreSQL 16 and Redis 7 containers through
 Testcontainers (`@ServiceConnection`), so they are hermetic: no shared dev
@@ -348,7 +348,7 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>60 tests · coverage gate"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>65 tests · coverage gate"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -451,7 +451,7 @@ Actuator · Micrometer · Prometheus · Grafana
 - Phase 3 (POS-terminal client): the C client was replaced by a Java network-failure test (Toxiproxy), see below
 
 **Next**
-- [ ] Exact replay bodies and fixed two-decimal money scale
+- [x] Exact replay bodies and fixed two-decimal money scale
 - [ ] REST Assured API tests with an OpenAPI contract check
 - [ ] Mutation testing with PIT
 - [ ] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry must return the same transfer
