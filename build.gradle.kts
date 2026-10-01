@@ -43,8 +43,33 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+// API tests: black-box HTTP tests (REST Assured) against the app booted on a random port.
+// Kept in their own source set so they run as a separate level; `check` depends on them.
+val apiTest: SourceSet by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+
+configurations[apiTest.implementationConfigurationName].extendsFrom(configurations.testImplementation.get())
+configurations[apiTest.runtimeOnlyConfigurationName].extendsFrom(configurations.testRuntimeOnly.get())
+
+dependencies {
+    "apiTestImplementation"("io.rest-assured:rest-assured:6.0.0")
+}
+
+val apiTestTask = tasks.register<Test>("apiTest") {
+    description = "Runs the REST Assured API tests."
+    group = "verification"
+    testClassesDirs = apiTest.output.classesDirs
+    classpath = apiTest.runtimeClasspath
+    shouldRunAfter(tasks.test)
+}
+
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+tasks.test {
     finalizedBy(tasks.jacocoTestReport)
 }
 
@@ -75,5 +100,5 @@ tasks.jacocoTestCoverageVerification {
 }
 
 tasks.check {
-    dependsOn(tasks.jacocoTestCoverageVerification)
+    dependsOn(tasks.jacocoTestCoverageVerification, apiTestTask)
 }

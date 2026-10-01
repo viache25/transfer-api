@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-65%20automated-25A162?logo=junit5&logoColor=white" alt="65 automated tests">
+  <img src="https://img.shields.io/badge/tests-73%20automated-25A162?logo=junit5&logoColor=white" alt="73 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
@@ -44,7 +44,7 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 49 unit tests (JUnit 5 + Mockito) and 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers, including multi-threaded race tests |
+| **Testing** | 49 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 8 black-box API tests (REST Assured) checked against the app's own OpenAPI spec |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
@@ -291,7 +291,8 @@ docker compose up -d postgres redis
 ./gradlew test      # full suite; needs Docker running, nothing else
 ./gradlew test --tests "com.slavaslava.transferapi.service.*" \
                --tests "com.slavaslava.transferapi.domain.*"   # unit tests only, no Docker
-./gradlew build     # compile + all tests + package (what CI runs)
+./gradlew apiTest   # REST Assured API tests only; needs Docker
+./gradlew build     # compile + all tests (incl. apiTest) + package (what CI runs)
 ```
 
 HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
@@ -315,6 +316,7 @@ system-level guarantees against a real database.
 |---|---|---|---|
 | **Unit** | 49 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants |
 | **Integration** | 16 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
+| **API** | 8 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, and a contract check of every response against `/v3/api-docs` |
 
 Integration tests start their own disposable PostgreSQL 16 and Redis 7 containers through
 Testcontainers (`@ServiceConnection`), so they are hermetic: no shared dev
@@ -341,6 +343,10 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 - No API key → 401 ProblemDetail; unknown key → 401; valid key → accepted
 - A terminal exceeding its request rate gets 429 ProblemDetail with `Retry-After`; other terminals are unaffected
 
+**API tests (`src/apiTest`, task `apiTest`, wired into `check`)**
+- Create account, transfer 201, replay 200 with the same id, key reuse 422 `problem+json`, missing API key 401, insufficient funds 409, paginated history
+- Success responses are validated against the app's own `/v3/api-docs`: the operation must be documented and every declared response property present with the right JSON type
+
 **Schema and startup**
 - The application context starts against a Flyway-migrated database with Hibernate in `validate` mode, so any drift between entities and migrations fails the build
 
@@ -348,7 +354,7 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>65 tests · coverage gate"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>73 tests · coverage gate"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -407,6 +413,7 @@ Updating to a new version is `docker compose pull && docker compose up -d`.
 src/main/java/...    web · service · domain · repository · dto · exception · config
 src/main/resources/  application.properties, Flyway migrations (V1–V3)
 src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
+src/apiTest/java/... REST Assured API tests + OpenAPI contract check
 ops/                 Prometheus scrape config, Grafana provisioning and dashboard
 Dockerfile           multi-stage build → JRE 21 runtime, non-root
 docker-compose.yml   app + PostgreSQL + Redis + Prometheus + Grafana
@@ -452,7 +459,7 @@ Actuator · Micrometer · Prometheus · Grafana
 
 **Next**
 - [x] Exact replay bodies and fixed two-decimal money scale
-- [ ] REST Assured API tests with an OpenAPI contract check
+- [x] REST Assured API tests with an OpenAPI contract check
 - [ ] Mutation testing with PIT
 - [ ] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry must return the same transfer
 - [ ] k6 load test with deliberate same-key retries
