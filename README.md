@@ -293,6 +293,7 @@ docker compose up -d postgres redis
                --tests "com.slavaslava.transferapi.domain.*"   # unit tests only, no Docker
 ./gradlew apiTest   # REST Assured API tests only; needs Docker
 ./gradlew build     # compile + all tests (incl. apiTest) + package (what CI runs)
+./gradlew pitest    # mutation testing of service/ and domain/ (unit tests only, no Docker)
 ```
 
 HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
@@ -349,6 +350,17 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 
 **Schema and startup**
 - The application context starts against a Flyway-migrated database with Hibernate in `validate` mode, so any drift between entities and migrations fails the build
+
+### Mutation testing
+
+Coverage says which lines ran, not whether the tests would notice a bug.
+[PIT](https://pitest.org) mutates the business logic (flips comparisons, removes
+calls, changes return values) and re-runs the unit tests against every mutant;
+a mutant no test fails on is a gap. `./gradlew pitest` targets `service/` and
+`domain/`, uses only the Docker-free unit tests, and writes
+`build/reports/pitest/index.html`. It is intentionally not part of `check`
+(too slow for every PR). Mutation score: not measured yet, to be recorded
+here after the first run.
 
 ## CI/CD pipeline
 
@@ -460,7 +472,7 @@ Actuator · Micrometer · Prometheus · Grafana
 **Next**
 - [x] Exact replay bodies and fixed two-decimal money scale
 - [x] REST Assured API tests with an OpenAPI contract check
-- [ ] Mutation testing with PIT
+- [x] Mutation testing with PIT (`./gradlew pitest`, not part of `check`)
 - [ ] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry must return the same transfer
 - [ ] k6 load test with deliberate same-key retries
 - [ ] A single server-rendered test-target page and Playwright UI tests
