@@ -3,6 +3,7 @@ plugins {
     jacoco
     id("org.springframework.boot") version "4.1.1"
     id("io.spring.dependency-management") version "1.1.7"
+    id("info.solidsoft.pitest") version "1.19.0"
 }
 
 group = "com.slavaslava"
@@ -101,4 +102,20 @@ tasks.jacocoTestCoverageVerification {
 
 tasks.check {
     dependsOn(tasks.jacocoTestCoverageVerification, apiTestTask)
+}
+
+// Mutation testing: `./gradlew pitest` mutates service/ and domain/ and re-runs the
+// Docker-free unit tests against each mutant. Deliberately NOT wired into `check`
+// (too slow for every PR); report in build/reports/pitest/index.html.
+pitest {
+    junit5PluginVersion = "1.2.3"
+    targetClasses = setOf("com.slavaslava.transferapi.service.*", "com.slavaslava.transferapi.domain.*")
+    targetTests = setOf(
+        "com.slavaslava.transferapi.service.*",
+        "com.slavaslava.transferapi.domain.*",
+        "com.slavaslava.transferapi.dto.*",
+    )
+    threads = 2
+    outputFormats = setOf("HTML", "XML")
+    timestampedReports = false
 }
