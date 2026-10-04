@@ -67,3 +67,24 @@ jobs:
             build/reports/tests/
             build/reports/jacoco/
           retention-days: 14
+
+  # Builds the production image exactly like cd.yml does, but never pushes it.
+  # CD only runs after merge (workflow_run), so without this job a broken
+  # Dockerfile would only show up once it is already on main.
+  docker-image:
+    name: Docker image (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the image without pushing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          tags: transfer-api:ci
+
+      # Only the executable Spring Boot jar has the layer tools; the plain jar
+      # (no Main-Class) would fail here.
+      - name: Check app.jar is the Spring Boot jar
+        run: docker run --rm --entrypoint java transfer-api:ci -Djarmode=tools -jar app.jar list-layers
