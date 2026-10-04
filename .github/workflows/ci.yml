@@ -54,7 +54,8 @@ jobs:
         uses: dorny/test-reporter@v3
         with:
           name: JUnit results
-          path: build/test-results/test/*.xml
+          # unit + integration (test) and REST Assured API tests (apiTest)
+          path: build/test-results/test/*.xml,build/test-results/apiTest/*.xml
           reporter: java-junit
           use-actions-summary: false   # create a check run on the PR instead of only a job summary
 

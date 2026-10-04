@@ -4,10 +4,11 @@
   <a href="https://github.com/viache25/transfer-api/actions/workflows/ci.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/viache25/transfer-api/actions/workflows/cd.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/cd.yml/badge.svg" alt="CD"></a>
   <a href="https://github.com/viache25/transfer-api/actions/workflows/nightly.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/nightly.yml/badge.svg" alt="Nightly"></a>
+  <a href="https://github.com/viache25/transfer-api/actions/workflows/mutation.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/mutation.yml/badge.svg" alt="Mutation testing"></a>
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-73%20automated-25A162?logo=junit5&logoColor=white" alt="73 automated tests">
+  <img src="https://img.shields.io/badge/tests-74%20automated-25A162?logo=junit5&logoColor=white" alt="74 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
@@ -44,7 +45,7 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 49 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 8 black-box API tests (REST Assured) checked against the app's own OpenAPI spec |
+| **Testing** | 50 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 8 black-box API tests (REST Assured) checked against the app's own OpenAPI spec |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
@@ -290,7 +291,9 @@ docker compose up -d postgres redis
 ```bash
 ./gradlew test      # full suite; needs Docker running, nothing else
 ./gradlew test --tests "com.slavaslava.transferapi.service.*" \
-               --tests "com.slavaslava.transferapi.domain.*"   # unit tests only, no Docker
+               --tests "com.slavaslava.transferapi.domain.*" \
+               --tests "com.slavaslava.transferapi.dto.*" \
+               --tests "com.slavaslava.transferapi.config.*"   # unit tests only, no Docker
 ./gradlew apiTest   # REST Assured API tests only; needs Docker
 ./gradlew build     # compile + all tests (incl. apiTest) + package (what CI runs)
 ./gradlew pitest    # mutation testing of service/ and domain/ (unit tests only, no Docker)
@@ -315,7 +318,7 @@ system-level guarantees against a real database.
 
 | Level | Count | Tools | What it proves |
 |---|---|---|---|
-| **Unit** | 49 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants |
+| **Unit** | 50 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants; rate-limit buckets and the 429 filter |
 | **Integration** | 16 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
 | **API** | 8 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, and a contract check of every response against `/v3/api-docs` |
 
@@ -359,14 +362,30 @@ calls, changes return values) and re-runs the unit tests against every mutant;
 a mutant no test fails on is a gap. `./gradlew pitest` targets `service/` and
 `domain/`, uses only the Docker-free unit tests, and writes
 `build/reports/pitest/index.html`. It is intentionally not part of `check`
-(too slow for every PR). Mutation score: not measured yet, to be recorded
-here after the first run.
+(too slow for every PR); instead [`mutation.yml`](.github/workflows/mutation.yml)
+runs it weekly and on demand, writes the score to the run summary and uploads
+the HTML report as an artifact.
+
+| Metric | Value |
+|---|---|
+| Mutants generated | 81 |
+| Mutation coverage (killed / all) | 73 / 81 = **90%** |
+| Test strength (killed / mutants reached by a test) | 73 / 73 = **100%** |
+| Line coverage of the mutated classes | 156 / 177 = 88% |
+
+Measured on 2026-10-04. The first run found one surviving mutant: changing
+`balance < amount` to `balance <= amount` in `Account.debit()` went unnoticed,
+because no test debited the exact balance. A boundary test now kills it. The 8
+remaining mutants are never reached by a unit test: simple getters and two
+read-only service methods (`getAccount`, `listTransfers`), which are covered by
+the integration and API tests instead. PIT's run only uses the Docker-free unit
+tests, so it can't see those.
 
 ## CI/CD pipeline
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>73 tests · coverage gate<br/>image build (no push)"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>74 tests · coverage gate<br/>image build (no push)"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -377,10 +396,11 @@ flowchart LR
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit, integration and API tests, coverage gate, packaging). Publishes JUnit results as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A second job builds the production Docker image exactly like CD does, without pushing it, and checks that it contains the executable Spring Boot jar, so a broken `Dockerfile` fails the PR instead of the release. A newer push cancels the superseded run. A red build blocks the merge. |
+| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit, integration and API tests, coverage gate, packaging). Publishes JUnit results (unit, integration and API tests) as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A second job builds the production Docker image exactly like CD does, without pushing it, and checks that it contains the executable Spring Boot jar, so a broken `Dockerfile` fails the PR instead of the release. A newer push cancels the superseded run. A red build blocks the merge. |
 | [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle `bootJar` build stage → slim JRE 21 runtime, non-root user; no tests in the image build, CI already ran them) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A red CI run on `main` never produces an image. |
 | [`dependabot.yml`](.github/dependabot.yml) | Weekly | Opens update PRs for Gradle dependencies (minor/patch grouped into one PR), GitHub Actions versions and the Dockerfile base images. Each PR goes through the same CI gate, so an update that breaks a test or drops coverage can't be merged. |
 | [`nightly.yml`](.github/workflows/nightly.yml) | Daily 02:00 UTC, manual | Full `./gradlew build --rerun-tasks` with no task-cache hits, even when nothing was pushed. Catches flaky tests (the concurrency tests run every night, not only when code changes) and drift from outside the repo: new base images, dependency or Testcontainers changes. |
+| [`mutation.yml`](.github/workflows/mutation.yml) | Mondays 03:00 UTC, manual | Runs `./gradlew pitest` (mutation testing of `service/` and `domain/`), writes mutants, mutation coverage and test strength to the run summary and uploads `build/reports/pitest/` as the `pitest-report` artifact. |
 
 ## Monitoring
 

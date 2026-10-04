@@ -1,0 +1,53 @@
+name: Mutation testing
+
+# Weekly PIT run over service/ and domain/ (Docker-free unit tests only).
+# Not part of CI: too slow to run on every pull request.
+on:
+  schedule:
+    - cron: '0 3 * * 1'   # Mondays 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pitest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true   # don't let the weekly run overwrite the CI cache
+
+      - name: Run PIT
+        run: |
+          chmod +x gradlew
+          ./gradlew pitest --no-daemon
+
+      - name: Mutation score summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
+          import xml.etree.ElementTree as ET
+          ms = list(ET.parse('build/reports/pitest/mutations.xml').getroot())
+          detected = sum(m.get('detected') == 'true' for m in ms)
+          covered = sum(m.get('status') != 'NO_COVERAGE' for m in ms)
+          print('### Mutation score\n\n| Metric | Value |\n|---|---|')
+          print(f'| mutants | {len(ms)} |')
+          print(f'| mutation coverage (killed / all) | {detected}/{len(ms)} = {detected / len(ms):.0%} |')
+          print(f'| test strength (killed / covered) | {detected}/{covered} = {detected / covered:.0%} |')
+          PY
+
+      - name: Upload PIT report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pitest-report
+          path: build/reports/pitest/
+          retention-days: 14
