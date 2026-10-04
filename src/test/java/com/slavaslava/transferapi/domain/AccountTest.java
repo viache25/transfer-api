@@ -20,6 +20,15 @@ class AccountTest {
     }
 
     @Test
+    void debitOfTheExactBalanceIsAllowedAndLeavesZero() {
+        Account account = new Account("Alice", new BigDecimal("50.00"), "EUR");
+
+        account.debit(new BigDecimal("50.00"));
+
+        assertThat(account.getBalance()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
     void debitThrowsAndLeavesBalanceUnchangedWhenFundsAreInsufficient() {
         Account account = new Account("Alice", new BigDecimal("50.00"), "EUR");
 
