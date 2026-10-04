@@ -105,11 +105,18 @@ jobs:
               print(f'| {name} | {0 if value is None else value} |')
           PY
 
-      # Errors the app logged during the run (also on success: a passing run may still have
-      # had a few failed requests within the error budget).
+      # What the app logged during the run, also on success: a passing run may still have had a
+      # few failed requests within the error budget. Unique-key violations are expected (the
+      # concurrent same-key pairs), so they are only counted.
       - name: App errors and warnings
         if: always()
-        run: docker compose logs --no-color app | grep -E -A 12 ' (ERROR|WARN) ' | head -n 400 || echo "none"
+        run: |
+          docker compose logs --no-color app > app.log
+          echo "expected duplicate-key races: $(grep -c 'violates unique constraint "uq_transfers_idempotency_key"' app.log || true)"
+          echo "--- other warnings ---"
+          grep -E ' WARN ' app.log | grep -v -E 'SQLState: 23505|uq_transfers_idempotency_key|SpringDoc' | head -n 60 || true
+          echo "--- errors ---"
+          grep -E -A 40 ' ERROR ' app.log | head -n 400 || true
 
       - name: Upload k6 report
         if: always()
