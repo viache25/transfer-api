@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-74%20automated-25A162?logo=junit5&logoColor=white" alt="74 automated tests">
+  <img src="https://img.shields.io/badge/tests-75%20automated-25A162?logo=junit5&logoColor=white" alt="75 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
@@ -45,7 +45,7 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 50 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 8 black-box API tests (REST Assured) checked against the app's own OpenAPI spec |
+| **Testing** | 50 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
@@ -105,6 +105,12 @@ idempotency at all.
 
 Deposits follow the same rules when an `Idempotency-Key` header is supplied.
 
+The dropped-response scenario in the diagram is reproduced for real by
+`NetworkFailureIdempotencyApiTest`. Toxiproxy sits between a test HTTP client
+and the running app and cuts the connection once the response starts, which is
+after the commit. The client retries with the same key and gets `200` with the
+same transfer id, and the balances show the money moved exactly once.
+
 ## Architecture
 
 ```mermaid
@@ -150,9 +156,9 @@ flowchart TB
     PROM -. scrapes /actuator/prometheus .-> TS
 ```
 
-The POS terminal on the left is a conceptual client: the retry behaviour it
-would show on a flaky network is exercised by the test suite (see the roadmap
-for the network-failure test that is still planned).
+The POS terminal on the left is a conceptual client. Its behaviour on a flaky
+network (a lost response, then a retry with the same key) is exercised by the
+Toxiproxy network-failure test in `src/apiTest`.
 
 - **`domain/`**: JPA entities. `Account` owns its invariants (`debit()`
   throws instead of letting a service skip a balance check).
@@ -320,7 +326,7 @@ system-level guarantees against a real database.
 |---|---|---|---|
 | **Unit** | 50 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants; rate-limit buckets and the 429 filter |
 | **Integration** | 16 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
-| **API** | 8 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, and a contract check of every response against `/v3/api-docs` |
+| **API** | 9 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers, Toxiproxy | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, a contract check of every response against `/v3/api-docs`, and a lost response after the commit recovered by a same-key retry |
 
 Integration tests start their own disposable PostgreSQL 16 and Redis 7 containers through
 Testcontainers (`@ServiceConnection`), so they are hermetic: no shared dev
@@ -333,6 +339,7 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 - A retried deposit with the same key credits exactly once
 - Reusing a key with a different payload is rejected (422) and executes nothing
 - Two requests racing with the same new key: the loser returns the winner's result
+- The network loses the response after the server committed (Toxiproxy closes the connection after the first response byte): the client gets an I/O error, the retry with the same key gets `200` with the same transfer id, and the money moved exactly once
 
 **Concurrency**
 - Two threads transferring 80.00 from a 100.00 account at the same instant: exactly one succeeds, the balance never goes negative (threads released together with a `CountDownLatch`)
@@ -350,6 +357,7 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 **API tests (`src/apiTest`, task `apiTest`, wired into `check`)**
 - Create account, transfer 201, replay 200 with the same id, key reuse 422 `problem+json`, missing API key 401, insufficient funds 409, paginated history
 - Success responses are validated against the app's own `/v3/api-docs`: the operation must be documented and every declared response property present with the right JSON type
+- Network failure (`NetworkFailureIdempotencyApiTest`): Toxiproxy runs in a container between a JDK `HttpClient` "terminal" and the app. A `limit_data` toxic cuts the first response after the commit, then the same-key retry is checked to replay and not re-execute
 
 **Schema and startup**
 - The application context starts against a Flyway-migrated database with Hibernate in `validate` mode, so any drift between entities and migrations fails the build
@@ -385,7 +393,7 @@ tests, so it can't see those.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>74 tests · coverage gate<br/>image build (no push)"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>75 tests · coverage gate<br/>image build (no push)"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -445,7 +453,7 @@ Updating to a new version is `docker compose pull && docker compose up -d`.
 src/main/java/...    web · service · domain · repository · dto · exception · config
 src/main/resources/  application.properties, Flyway migrations (V1–V3)
 src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
-src/apiTest/java/... REST Assured API tests + OpenAPI contract check
+src/apiTest/java/... REST Assured API tests, OpenAPI contract check, Toxiproxy network-failure test
 ops/                 Prometheus scrape config, Grafana provisioning and dashboard
 Dockerfile           multi-stage build (bootJar only) → JRE 21 runtime, non-root
 docker-compose.yml   app + PostgreSQL + Redis + Prometheus + Grafana
@@ -459,8 +467,8 @@ JPA / Hibernate 7 · Spring Security · Bucket4j · Jackson 3 · Bean Validation
 
 **Data:** PostgreSQL 16 · Flyway · Redis 7 (Spring Data Redis / Lettuce)
 
-**Testing:** JUnit 5 · Mockito · AssertJ · MockMvc · Testcontainers ·
-Spring Security Test · JaCoCo
+**Testing:** JUnit 5 · Mockito · AssertJ · MockMvc · REST Assured ·
+Testcontainers · Toxiproxy · Spring Security Test · JaCoCo · PIT
 
 **Delivery:** Gradle (Kotlin DSL) · Docker (multi-stage) · Docker Compose ·
 GitHub Actions · GitHub Container Registry · Trivy
@@ -487,13 +495,13 @@ Actuator · Micrometer · Prometheus · Grafana
 **Phases**
 - Phase 1 (core: idempotency, optimistic-lock retry, concurrency tests, Docker, CI/CD): done
 - Phase 2 (security, Testcontainers, observability, Redis cache, rate limiting): done
-- Phase 3 (POS-terminal client): the C client was replaced by a Java network-failure test (Toxiproxy), see below
+- Phase 3 (POS-terminal client): done differently. Per D8 the C client was replaced by a Java network-failure test with Toxiproxy
 
 **Next**
 - [x] Exact replay bodies and fixed two-decimal money scale
 - [x] REST Assured API tests with an OpenAPI contract check
 - [x] Mutation testing with PIT (`./gradlew pitest`, not part of `check`)
-- [ ] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry must return the same transfer
+- [x] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry returns the same transfer
 - [ ] k6 load test with deliberate same-key retries
 - [ ] A single server-rendered test-target page and Playwright UI tests
 - [ ] Ephemeral-environment smoke test against the published image
