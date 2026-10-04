@@ -9,8 +9,8 @@ import com.slavaslava.transferapi.exception.AccountNotFoundException;
 import com.slavaslava.transferapi.exception.IdempotencyKeyReuseException;
 import com.slavaslava.transferapi.repository.AccountRepository;
 import com.slavaslava.transferapi.repository.DepositRepository;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -61,7 +61,8 @@ public class AccountService {
             try {
                 Account account = depositTransactionExecutor.execute(id, request, idempotencyKey);
                 return AccountResponse.from(account);
-            } catch (OptimisticLockingFailureException e) {
+            } catch (ConcurrencyFailureException e) {
+                // optimistic-lock conflict or lock failure (e.g. deadlock victim): the attempt rolled back, retry
                 if (++failedAttempts >= MAX_LOCK_ATTEMPTS) {
                     throw e;
                 }

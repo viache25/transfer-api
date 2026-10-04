@@ -1,7 +1,7 @@
 package com.slavaslava.transferapi.exception;
 
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -35,8 +35,9 @@ public class GlobalExceptionHandler {
         return problem(HttpStatus.UNPROCESSABLE_CONTENT, "Idempotency-Key Reuse", ex.getMessage());
     }
 
-    @ExceptionHandler(OptimisticLockingFailureException.class)
-    public ProblemDetail handleOptimisticLock(OptimisticLockingFailureException ex) {
+    // optimistic-lock conflicts and lock failures (deadlock victim, lock timeout) that outlasted the retries
+    @ExceptionHandler(ConcurrencyFailureException.class)
+    public ProblemDetail handleConcurrencyFailure(ConcurrencyFailureException ex) {
         return problem(HttpStatus.CONFLICT, "Concurrent Modification",
                 "The account was modified by a concurrent operation; please retry the request.");
     }

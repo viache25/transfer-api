@@ -112,4 +112,6 @@ account updates in load order, so the two transactions lock the rows in opposite
 deadlock exception was not handled, and the resulting error dispatch was rejected by the security
 filter chain, so the terminal got a misleading `401 Missing or invalid X-API-Key header` instead
 of a `5xx` or a retryable `409`. No money was affected: the deadlock victim rolled back, and the
-ledger reconciled. The fix is tracked as a separate follow-up PR.
+ledger reconciled. PR #33 fixed both: Hibernate now flushes updates sorted by primary key
+(`hibernate.order_updates`), so every transfer locks the lower account id first, a lock failure is
+retried like a version conflict, and an unhandled error is reported as a `500`.

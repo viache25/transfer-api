@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-75%20automated-25A162?logo=junit5&logoColor=white" alt="75 automated tests">
+  <img src="https://img.shields.io/badge/tests-80%20automated-25A162?logo=junit5&logoColor=white" alt="80 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
@@ -46,7 +46,7 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 50 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit; a k6 load test with deliberate same-key retries that reconciles the ledger afterwards |
+| **Testing** | 52 unit tests (JUnit 5 + Mockito), 19 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit; a k6 load test with deliberate same-key retries that reconciles the ledger afterwards |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) and smoke-tested |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab), then starts the published image in an ephemeral Docker Compose environment and smoke-tests it |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
@@ -97,7 +97,7 @@ Three mechanisms work together, each covering a failure mode the others don't:
 |---|---|
 | **Idempotency-key replay** | The common case: the client didn't see the response and retries later, after the first request already committed. |
 | **Unique DB constraint + race recovery** | Two requests with the same brand-new key arrive at the same instant. Both pass the replay check, only one wins the insert; the loser re-queries and returns the winner's result instead of an error. |
-| **Optimistic locking (`@Version`) + retry** | Two *different* operations touch the same account concurrently. Each account row is version-checked at commit; the losing transaction reloads fresh balances and retries, up to 3 attempts. |
+| **Optimistic locking (`@Version`) + retry** | Two *different* operations touch the same account concurrently. Each account row is version-checked at commit; the losing transaction reloads fresh balances and retries, up to 3 attempts. Account rows are always updated in id order, so two opposite transfers (A→B and B→A) can't deadlock, and a lock failure is retried like a version conflict. |
 
 A key can only be replayed for the **exact same payload**. Reusing a key with
 a different request is rejected with `422`, because silently returning
@@ -331,8 +331,8 @@ system-level guarantees against a real database.
 
 | Level | Count | Tools | What it proves |
 |---|---|---|---|
-| **Unit** | 50 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants; rate-limit buckets and the 429 filter |
-| **Integration** | 16 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
+| **Unit** | 52 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling (including a deadlock victim being retried); validation rules; account invariants; rate-limit buckets and the 429 filter |
+| **Integration** | 19 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database, including the row-lock order that keeps opposite transfers from deadlocking |
 | **API** | 9 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers, Toxiproxy | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, a contract check of every response against `/v3/api-docs`, and a lost response after the commit recovered by a same-key retry |
 | **Smoke** | 7 checks | Bash, curl, jq, Docker Compose | The real Docker image, started with PostgreSQL and Redis in the production profile: health, 401, accounts, transfer, same-key replay (balances moved once), key reuse 422. Runs on every PR (locally built image) and after every release (published image) |
 | **Load** | 1 scenario | k6, Docker Compose | 10 terminals with their own API keys for 60s; 20% of transfers retried with the same key, 5% sent twice concurrently. Thresholds: p95 latency, error rate < 1%, zero idempotency violations, and a ledger reconciliation afterwards (total conserved, every balance explained by the recorded transfers, no key executed twice). Weekly, on demand, and on PRs that touch `load/` ([details and results](load/README.md)) |
@@ -353,7 +353,8 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 **Concurrency**
 - Two threads transferring 80.00 from a 100.00 account at the same instant: exactly one succeeds, the balance never goes negative (threads released together with a `CountDownLatch`)
 - A deposit racing a transfer on the same account completes without a concurrency error
-- Optimistic-lock conflicts are retried and succeed; after 3 failed attempts the error propagates
+- Optimistic-lock conflicts and deadlock victims are retried and succeed; after 3 failed attempts the error propagates as 409
+- A transfer locks its two account rows in id order whatever its direction, so opposite transfers can't deadlock (found by the k6 load test)
 
 **Business rules**
 - Insufficient funds, currency mismatch, same-account transfer, missing accounts
@@ -361,6 +362,7 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 
 **Security**
 - No API key → 401 ProblemDetail; unknown key → 401; valid key → accepted
+- A server error inside an authorized request is reported as itself (500), not as a 401 from the error page
 - A terminal exceeding its request rate gets 429 ProblemDetail with `Retry-After`; other terminals are unaffected
 
 **API tests (`src/apiTest`, task `apiTest`, wired into `check`)**
@@ -407,7 +409,7 @@ tests, so it can't see those.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>75 tests · coverage gate<br/>image build + smoke test"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>80 tests · coverage gate<br/>image build + smoke test"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
