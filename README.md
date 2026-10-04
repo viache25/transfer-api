@@ -46,8 +46,8 @@ project, and the test suite is built to prove it.
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
 | **Testing** | 50 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit |
-| **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) |
-| **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
+| **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) and smoke-tested |
+| **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab), then starts the published image in an ephemeral Docker Compose environment and smoke-tests it |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
 | **API contract** | OpenAPI 3 spec and Swagger UI; all errors as RFC 7807 `application/problem+json` |
 | **Observability** | Actuator health, Micrometer business counters, Prometheus scraping, pre-provisioned Grafana dashboard with latency percentiles |
@@ -263,6 +263,7 @@ Requirements: Docker. Nothing else.
 ```bash
 git clone https://github.com/viache25/transfer-api && cd transfer-api
 docker compose up
+scripts/smoke.sh   # optional, in a second terminal: 7 end-to-end checks against the running stack
 ```
 
 | Service | URL |
@@ -303,6 +304,9 @@ docker compose up -d postgres redis
 ./gradlew apiTest   # REST Assured API tests only; needs Docker
 ./gradlew build     # compile + all tests (incl. apiTest) + package (what CI runs)
 ./gradlew pitest    # mutation testing of service/ and domain/ (unit tests only, no Docker)
+
+scripts/smoke.sh                       # smoke test against a running app (default: docker compose up on :8080)
+scripts/smoke-ephemeral.sh <image>     # start <image> + PostgreSQL + Redis, provision a key, smoke test, tear down
 ```
 
 HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
@@ -327,6 +331,7 @@ system-level guarantees against a real database.
 | **Unit** | 50 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling; validation rules; account invariants; rate-limit buckets and the 429 filter |
 | **Integration** | 16 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
 | **API** | 9 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers, Toxiproxy | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, a contract check of every response against `/v3/api-docs`, and a lost response after the commit recovered by a same-key retry |
+| **Smoke** | 7 checks | Bash, curl, jq, Docker Compose | The real Docker image, started with PostgreSQL and Redis in the production profile: health, 401, accounts, transfer, same-key replay (balances moved once), key reuse 422. Runs on every PR (locally built image) and after every release (published image) |
 
 Integration tests start their own disposable PostgreSQL 16 and Redis 7 containers through
 Testcontainers (`@ServiceConnection`), so they are hermetic: no shared dev
@@ -393,19 +398,20 @@ tests, so it can't see those.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>75 tests · coverage gate<br/>image build (no push)"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>75 tests · coverage gate<br/>image build + smoke test"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
     CD --> R[("ghcr.io/viache25/transfer-api<br/>:latest · :&lt;sha&gt;")]
     CD --> T["Trivy scan<br/>→ Security tab"]
+    R --> SM["Smoke test<br/>published image + Postgres + Redis<br/>(ephemeral docker compose)"]
     R --> S[Any Docker host]
 ```
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit, integration and API tests, coverage gate, packaging). Publishes JUnit results (unit, integration and API tests) as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A second job builds the production Docker image exactly like CD does, without pushing it, and checks that it contains the executable Spring Boot jar, so a broken `Dockerfile` fails the PR instead of the release. A newer push cancels the superseded run. A red build blocks the merge. |
-| [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle `bootJar` build stage → slim JRE 21 runtime, non-root user; no tests in the image build, CI already ran them) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A red CI run on `main` never produces an image. |
+| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit, integration and API tests, coverage gate, packaging). Publishes JUnit results (unit, integration and API tests) as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A second job builds the production Docker image exactly like CD does, without pushing it, checks that it contains the executable Spring Boot jar and runs the same ephemeral-environment smoke test CD runs, so a broken `Dockerfile` or image fails the PR instead of the release. A newer push cancels the superseded run. A red build blocks the merge. |
+| [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle `bootJar` build stage → slim JRE 21 runtime, non-root user; no tests in the image build, CI already ran them) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A second job (`smoke`) pulls the image it just pushed (by digest), starts it with PostgreSQL and Redis through `docker-compose.smoke.yml` in the production profile, provisions a terminal key in the database and runs `scripts/smoke.sh` against it (D10: an ephemeral environment instead of a paid server). A red CI run on `main` never produces an image. |
 | [`dependabot.yml`](.github/dependabot.yml) | Weekly | Opens update PRs for Gradle dependencies (minor/patch grouped into one PR), GitHub Actions versions and the Dockerfile base images. Each PR goes through the same CI gate, so an update that breaks a test or drops coverage can't be merged. |
 | [`nightly.yml`](.github/workflows/nightly.yml) | Daily 02:00 UTC, manual | Full `./gradlew build --rerun-tasks` with no task-cache hits, even when nothing was pushed. Catches flaky tests (the concurrency tests run every night, not only when code changes) and drift from outside the repo: new base images, dependency or Testcontainers changes. |
 | [`mutation.yml`](.github/workflows/mutation.yml) | Mondays 03:00 UTC, manual | Runs `./gradlew pitest` (mutation testing of `service/` and `domain/`), writes mutants, mutation coverage and test strength to the run summary and uploads `build/reports/pitest/` as the `pitest-report` artifact. |
@@ -445,6 +451,13 @@ docker compose exec postgres psql -U transferapi -c \
 
 Put a TLS-terminating reverse proxy (for example Caddy) in front of port 8080.
 Updating to a new version is `docker compose pull && docker compose up -d`.
+Afterwards, `BASE_URL=https://<your-host> API_KEY=$KEY scripts/smoke.sh` checks
+the deployment end to end. It creates two small test accounts and one transfer.
+
+CD runs this same procedure on every release in a throwaway environment:
+`scripts/smoke-ephemeral.sh` starts the published image with PostgreSQL and
+Redis (`docker-compose.smoke.yml`), inserts a terminal key as above, runs the
+smoke test and tears everything down.
 
 ## Repository layout
 
@@ -457,6 +470,8 @@ src/apiTest/java/... REST Assured API tests, OpenAPI contract check, Toxiproxy n
 ops/                 Prometheus scrape config, Grafana provisioning and dashboard
 Dockerfile           multi-stage build (bootJar only) → JRE 21 runtime, non-root
 docker-compose.yml   app + PostgreSQL + Redis + Prometheus + Grafana
+docker-compose.smoke.yml  ephemeral smoke-test environment: a given image + PostgreSQL + Redis
+scripts/             smoke.sh (HTTP smoke test), smoke-ephemeral.sh (compose up → key → smoke → down)
 CLAUDE.md            implementation notes and stack-specific gotchas
 ```
 
@@ -504,7 +519,7 @@ Actuator · Micrometer · Prometheus · Grafana
 - [x] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry returns the same transfer
 - [ ] k6 load test with deliberate same-key retries
 - [ ] A single server-rendered test-target page and Playwright UI tests
-- [ ] Ephemeral-environment smoke test against the published image
+- [x] Ephemeral-environment smoke test against the published image (CD) and the PR image (CI)
 
 Out of scope by design: message brokers, microservices, a frontend,
 Kubernetes, currency conversion.
