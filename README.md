@@ -45,7 +45,7 @@ project, and the test suite is built to prove it.
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
 | **Testing** | 49 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 8 black-box API tests (REST Assured) checked against the app's own OpenAPI spec |
-| **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR |
+| **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab) |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
 | **API contract** | OpenAPI 3 spec and Swagger UI; all errors as RFC 7807 `application/problem+json` |
@@ -366,7 +366,7 @@ here after the first run.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>73 tests · coverage gate"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>73 tests · coverage gate<br/>image build (no push)"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -377,8 +377,8 @@ flowchart LR
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit and integration tests, coverage gate, packaging). Publishes JUnit results as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A newer push cancels the superseded run. A red build blocks the merge. |
-| [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle build stage → slim JRE 21 runtime, non-root user) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A red CI run on `main` never produces an image. |
+| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit, integration and API tests, coverage gate, packaging). Publishes JUnit results as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A second job builds the production Docker image exactly like CD does, without pushing it, and checks that it contains the executable Spring Boot jar, so a broken `Dockerfile` fails the PR instead of the release. A newer push cancels the superseded run. A red build blocks the merge. |
+| [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle `bootJar` build stage → slim JRE 21 runtime, non-root user; no tests in the image build, CI already ran them) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A red CI run on `main` never produces an image. |
 | [`dependabot.yml`](.github/dependabot.yml) | Weekly | Opens update PRs for Gradle dependencies (minor/patch grouped into one PR), GitHub Actions versions and the Dockerfile base images. Each PR goes through the same CI gate, so an update that breaks a test or drops coverage can't be merged. |
 | [`nightly.yml`](.github/workflows/nightly.yml) | Daily 02:00 UTC, manual | Full `./gradlew build --rerun-tasks` with no task-cache hits, even when nothing was pushed. Catches flaky tests (the concurrency tests run every night, not only when code changes) and drift from outside the repo: new base images, dependency or Testcontainers changes. |
 
@@ -427,7 +427,7 @@ src/main/resources/  application.properties, Flyway migrations (V1–V3)
 src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
 src/apiTest/java/... REST Assured API tests + OpenAPI contract check
 ops/                 Prometheus scrape config, Grafana provisioning and dashboard
-Dockerfile           multi-stage build → JRE 21 runtime, non-root
+Dockerfile           multi-stage build (bootJar only) → JRE 21 runtime, non-root
 docker-compose.yml   app + PostgreSQL + Redis + Prometheus + Grafana
 CLAUDE.md            implementation notes and stack-specific gotchas
 ```
