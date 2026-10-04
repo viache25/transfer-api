@@ -169,8 +169,8 @@ function violation(key, message, res) {
   console.error(`idempotency violation for ${key}: ${message} (HTTP ${res.status} ${res.body})`);
 }
 
-function giveUp(key, res) {
-  console.warn(`${key}: gave up after ${MAX_ATTEMPTS} sends, last answer HTTP ${res.status} ${res.body}`);
+function giveUp(key, res, attempts) {
+  console.warn(`${key}: no success after ${attempts} send(s), last answer HTTP ${res.status} ${res.body}`);
 }
 
 function pickTwo(accounts) {
@@ -221,15 +221,15 @@ function transfer(url, body, params, key) {
     transfersRecovered.add(1);
     return res;
   }
-  giveUp(key, res);
+  giveUp(key, res, attempts);
   return null;
 }
 
 // The deliberate retry after the answer arrived: must be 200 with the original id, never a new 201.
 function replay(url, body, params, key, first) {
-  const { res } = sendWithRetries(url, body, params);
+  const { res, attempts } = sendWithRetries(url, body, params);
   if (isTransient(res)) {
-    giveUp(key, res);
+    giveUp(key, res, attempts);
     return;
   }
   const ok = check(res, {
@@ -249,7 +249,7 @@ function race(url, body, params, key) {
   const responses = http.batch([['POST', url, body, params], ['POST', url, body, params]])
     .map((r) => sendWithRetries(url, body, params, r).res);
   if (responses.some(isTransient)) {
-    giveUp(key, responses.find(isTransient));
+    giveUp(key, responses.find(isTransient), MAX_ATTEMPTS);
     return;
   }
   const created = responses.filter((r) => r.status === 201).length;

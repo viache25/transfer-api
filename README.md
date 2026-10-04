@@ -5,6 +5,7 @@
   <a href="https://github.com/viache25/transfer-api/actions/workflows/cd.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/cd.yml/badge.svg" alt="CD"></a>
   <a href="https://github.com/viache25/transfer-api/actions/workflows/nightly.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/nightly.yml/badge.svg" alt="Nightly"></a>
   <a href="https://github.com/viache25/transfer-api/actions/workflows/mutation.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/mutation.yml/badge.svg" alt="Mutation testing"></a>
+  <a href="https://github.com/viache25/transfer-api/actions/workflows/load.yml"><img src="https://github.com/viache25/transfer-api/actions/workflows/load.yml/badge.svg" alt="Load test"></a>
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
@@ -45,7 +46,7 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 50 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit |
+| **Testing** | 50 unit tests (JUnit 5 + Mockito), 16 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit; a k6 load test with deliberate same-key retries that reconciles the ledger afterwards |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) and smoke-tested |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab), then starts the published image in an ephemeral Docker Compose environment and smoke-tests it |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
@@ -158,7 +159,8 @@ flowchart TB
 
 The POS terminal on the left is a conceptual client. Its behaviour on a flaky
 network (a lost response, then a retry with the same key) is exercised by the
-Toxiproxy network-failure test in `src/apiTest`.
+Toxiproxy network-failure test in `src/apiTest`. A fleet of them under load,
+retrying with the same key, is simulated by the k6 load test in `load/`.
 
 - **`domain/`**: JPA entities. `Account` owns its invariants (`debit()`
   throws instead of letting a service skip a balance check).
@@ -307,6 +309,7 @@ docker compose up -d postgres redis
 
 scripts/smoke.sh                       # smoke test against a running app (default: docker compose up on :8080)
 scripts/smoke-ephemeral.sh <image>     # start <image> + PostgreSQL + Redis, provision a key, smoke test, tear down
+k6 run -e API_KEYS="$(load/provision-terminals.sh 10)" load/transfers.js   # load test against docker compose up (see load/README.md)
 ```
 
 HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
@@ -332,6 +335,7 @@ system-level guarantees against a real database.
 | **Integration** | 16 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database |
 | **API** | 9 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers, Toxiproxy | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, a contract check of every response against `/v3/api-docs`, and a lost response after the commit recovered by a same-key retry |
 | **Smoke** | 7 checks | Bash, curl, jq, Docker Compose | The real Docker image, started with PostgreSQL and Redis in the production profile: health, 401, accounts, transfer, same-key replay (balances moved once), key reuse 422. Runs on every PR (locally built image) and after every release (published image) |
+| **Load** | 1 scenario | k6, Docker Compose | 10 terminals with their own API keys for 60s; 20% of transfers retried with the same key, 5% sent twice concurrently. Thresholds: p95 latency, error rate < 1%, zero idempotency violations, and a ledger reconciliation afterwards (total conserved, every balance explained by the recorded transfers, no key executed twice). Weekly, on demand, and on PRs that touch `load/` ([details and results](load/README.md)) |
 
 Integration tests start their own disposable PostgreSQL 16 and Redis 7 containers through
 Testcontainers (`@ServiceConnection`), so they are hermetic: no shared dev
@@ -363,6 +367,11 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 - Create account, transfer 201, replay 200 with the same id, key reuse 422 `problem+json`, missing API key 401, insufficient funds 409, paginated history
 - Success responses are validated against the app's own `/v3/api-docs`: the operation must be documented and every declared response property present with the right JSON type
 - Network failure (`NetworkFailureIdempotencyApiTest`): Toxiproxy runs in a container between a JDK `HttpClient` "terminal" and the app. A `limit_data` toxic cuts the first response after the commit, then the same-key retry is checked to replay and not re-execute
+
+**Load (`load/transfers.js`, k6)**
+- Under concurrent load from 10 terminals, every same-key retry (sequential or concurrent) returns the original transfer id and never a second `201`
+- After the run, the total balance is conserved, every account's balance equals its opening balance plus its recorded transfers, and no `Idempotency-Key` appears twice
+- p95 latency and error-rate thresholds; measured numbers in [load/README.md](load/README.md#results)
 
 **Schema and startup**
 - The application context starts against a Flyway-migrated database with Hibernate in `validate` mode, so any drift between entities and migrations fails the build
@@ -415,6 +424,7 @@ flowchart LR
 | [`dependabot.yml`](.github/dependabot.yml) | Weekly | Opens update PRs for Gradle dependencies (minor/patch grouped into one PR), GitHub Actions versions and the Dockerfile base images. Each PR goes through the same CI gate, so an update that breaks a test or drops coverage can't be merged. |
 | [`nightly.yml`](.github/workflows/nightly.yml) | Daily 02:00 UTC, manual | Full `./gradlew build --rerun-tasks` with no task-cache hits, even when nothing was pushed. Catches flaky tests (the concurrency tests run every night, not only when code changes) and drift from outside the repo: new base images, dependency or Testcontainers changes. |
 | [`mutation.yml`](.github/workflows/mutation.yml) | Mondays 03:00 UTC, manual | Runs `./gradlew pitest` (mutation testing of `service/` and `domain/`), writes mutants, mutation coverage and test strength to the run summary and uploads `build/reports/pitest/` as the `pitest-report` artifact. |
+| [`load.yml`](.github/workflows/load.yml) | Sundays 04:00 UTC, manual, pull requests that change `load/` | Starts the Docker Compose stack, provisions 10 terminal keys and runs the k6 load test (`load/transfers.js`) for 60s: p95 latency, error rate, idempotency and ledger thresholds. Writes requests, throughput, p95/p99 and the idempotency counters to the run summary and uploads the k6 summary and HTML report as the `k6-report` artifact. Not a per-PR gate: shared-runner latency is too noisy to block unrelated changes on. |
 
 ## Monitoring
 
@@ -472,6 +482,7 @@ Dockerfile           multi-stage build (bootJar only) → JRE 21 runtime, non-ro
 docker-compose.yml   app + PostgreSQL + Redis + Prometheus + Grafana
 docker-compose.smoke.yml  ephemeral smoke-test environment: a given image + PostgreSQL + Redis
 scripts/             smoke.sh (HTTP smoke test), smoke-ephemeral.sh (compose up → key → smoke → down)
+load/                k6 load test (transfers.js), terminal-key provisioning, how to run it
 CLAUDE.md            implementation notes and stack-specific gotchas
 ```
 
@@ -483,7 +494,7 @@ JPA / Hibernate 7 · Spring Security · Bucket4j · Jackson 3 · Bean Validation
 **Data:** PostgreSQL 16 · Flyway · Redis 7 (Spring Data Redis / Lettuce)
 
 **Testing:** JUnit 5 · Mockito · AssertJ · MockMvc · REST Assured ·
-Testcontainers · Toxiproxy · Spring Security Test · JaCoCo · PIT
+Testcontainers · Toxiproxy · Spring Security Test · JaCoCo · PIT · k6
 
 **Delivery:** Gradle (Kotlin DSL) · Docker (multi-stage) · Docker Compose ·
 GitHub Actions · GitHub Container Registry · Trivy
@@ -517,7 +528,7 @@ Actuator · Micrometer · Prometheus · Grafana
 - [x] REST Assured API tests with an OpenAPI contract check
 - [x] Mutation testing with PIT (`./gradlew pitest`, not part of `check`)
 - [x] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry returns the same transfer
-- [ ] k6 load test with deliberate same-key retries
+- [x] k6 load test with deliberate same-key retries and a ledger reconciliation afterwards
 - [ ] A single server-rendered test-target page and Playwright UI tests
 - [x] Ephemeral-environment smoke test against the published image (CD) and the PR image (CI)
 
