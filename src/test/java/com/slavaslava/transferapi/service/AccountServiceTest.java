@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -147,6 +148,20 @@ class AccountServiceTest {
 
         assertThat(response.balance()).isEqualByComparingTo("125.00");
         verify(depositTransactionExecutor, times(3)).execute(1L, request, "key-1");
+    }
+
+    @Test
+    void retriesWhenTheAttemptLostADeadlock() {
+        DepositRequest request = new DepositRequest(new BigDecimal("25.00"));
+        when(depositRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(depositTransactionExecutor.execute(1L, request, "key-1"))
+                .thenThrow(new CannotAcquireLockException("ERROR: deadlock detected"))
+                .thenReturn(account(1L, "125.00"));
+
+        AccountResponse response = accountService.deposit(1L, request, "key-1");
+
+        assertThat(response.balance()).isEqualByComparingTo("125.00");
+        verify(depositTransactionExecutor, times(2)).execute(1L, request, "key-1");
     }
 
     @Test

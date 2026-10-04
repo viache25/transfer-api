@@ -8,8 +8,8 @@ import com.slavaslava.transferapi.exception.IdempotencyKeyReuseException;
 import com.slavaslava.transferapi.repository.TransferRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -63,7 +63,9 @@ public class TransferService {
                 // the executor's transaction has committed by now, so the cache never holds an uncommitted transfer
                 replayCache.put(idempotencyKey, response);
                 return new TransferCreationResult(response, false);
-            } catch (OptimisticLockingFailureException e) {
+            } catch (ConcurrencyFailureException e) {
+                // an optimistic-lock conflict (@Version changed) or a lock failure such as a deadlock
+                // victim: either way the attempt's transaction rolled back completely, so retry it
                 if (++failedAttempts >= MAX_LOCK_ATTEMPTS) {
                     throw e;
                 }

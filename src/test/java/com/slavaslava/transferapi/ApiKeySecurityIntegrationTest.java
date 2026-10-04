@@ -7,6 +7,8 @@ import com.slavaslava.transferapi.dto.CreateTransferRequest;
 import com.slavaslava.transferapi.repository.AccountRepository;
 import com.slavaslava.transferapi.repository.TerminalRepository;
 import com.slavaslava.transferapi.repository.TransferRepository;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.RequestDispatcher;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -98,5 +101,27 @@ class ApiKeySecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated());
+    }
+
+    // An exception thrown while handling an authorized request makes the container forward to /error
+    // (an ERROR dispatch). The API-key filter does not run again there, so before the fix the error
+    // page itself was rejected and a deadlock surfaced to the client as "401 Missing or invalid X-API-Key".
+    @Test
+    void errorDispatchRendersTheRealStatusInsteadOf401() throws Exception {
+        mockMvc.perform(get("/error")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .with(request -> {
+                            request.setDispatcherType(DispatcherType.ERROR);
+                            request.setAttribute(RequestDispatcher.ERROR_STATUS_CODE, 500);
+                            request.setAttribute(RequestDispatcher.ERROR_REQUEST_URI, "/transfers");
+                            return request;
+                        }))
+                .andExpect(status().isInternalServerError());
+    }
+
+    @Test
+    void directRequestToTheErrorPageStillNeedsAnApiKey() throws Exception {
+        mockMvc.perform(get("/error").accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
     }
 }

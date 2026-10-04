@@ -92,24 +92,30 @@ shared runner is too noisy to block unrelated changes on.
 
 ## Results
 
-Measured on a GitHub-hosted `ubuntu-latest` runner (PR #32, run 37236768387): 10 terminals,
-20 accounts, 60s, with the app, PostgreSQL and Redis on the same machine as k6.
+Measured on a GitHub-hosted `ubuntu-latest` runner: 10 terminals, 20 accounts, 60s, with the app,
+PostgreSQL and Redis on the same machine as k6.
 
-| Metric | Value |
-|---|---|
-| Requests (terminals scenario) | 6,746 (109 req/s) |
-| p95 / p99 latency | 11.2 ms / 27.6 ms |
-| Error rate | 0.25% (17 requests, see below) |
-| Transfers in the ledger | 5,384 (= transfers answered `201`) |
-| Same-key retries answered with the original id | 1,075 sequential, 270 concurrent pairs |
-| Idempotency / ledger violations | 0 / 0 |
+| Metric | PR #33 (after the deadlock fix) | PR #32 (first runs) |
+|---|---|---|
+| Requests (terminals scenario) | 6,906 (112 req/s) | 6,746 (109 req/s) |
+| p95 / p99 / max latency | 11.9 ms / 25.0 ms / 646 ms | 11.2 ms / 27.6 ms / 1.03 s |
+| Error rate | 0.13% (9 × `409 Concurrent Modification`) | 0.25% (15 × `409`, 2 × `401`) |
+| Transfers in the ledger | 5,544 (= transfers answered `201`) | 5,384 (= transfers answered `201`) |
+| Same-key retries answered with the original id | 1,078 sequential, 275 concurrent pairs | 1,075 sequential, 270 concurrent pairs |
+| Idempotency / ledger violations | 0 / 0 | 0 / 0 |
+| PostgreSQL deadlocks in the app log | 0 | 2 |
 
-The 17 failed requests were 15 `409 Concurrent Modification` answers, where all 3 optimistic-lock
-attempts lost and the terminal's retry with the same key then succeeded, plus 2 requests that
-found a real bug. Two opposite transfers between the same pair of accounts (A→B and B→A)
-committing at the same moment hit a PostgreSQL **deadlock** (`40P01`). Hibernate flushes the two
-account updates in load order, so the two transactions lock the rows in opposite order. The
+The `409 Concurrent Modification` answers are expected under this much contention (10 terminals,
+20 accounts): all 3 optimistic-lock attempts lost, the API asked the client to retry, and the
+terminal's retry with the same key succeeded.
+
+The first runs found a real bug. Two opposite transfers between the same pair of accounts (A→B and
+B→A) committing at the same moment hit a PostgreSQL **deadlock** (`40P01`). Hibernate flushed the
+two account updates in load order, so the two transactions locked the rows in opposite order. The
 deadlock exception was not handled, and the resulting error dispatch was rejected by the security
-filter chain, so the terminal got a misleading `401 Missing or invalid X-API-Key header` instead
-of a `5xx` or a retryable `409`. No money was affected: the deadlock victim rolled back, and the
-ledger reconciled. The fix is tracked as a separate follow-up PR.
+filter chain, so the terminal got a misleading `401 Missing or invalid X-API-Key header` instead of
+a `5xx` or a retryable `409` (the 1 s `max` is PostgreSQL's `deadlock_timeout`). No money was
+affected: the deadlock victim rolled back, and the ledger reconciled. PR #33 fixed both. Hibernate
+now flushes updates sorted by primary key (`hibernate.order_updates`), so every transfer locks the
+lower account id first. A lock failure is retried like a version conflict. An unhandled error is
+reported as a `500`.

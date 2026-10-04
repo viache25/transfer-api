@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -139,6 +140,21 @@ class TransferServiceTest {
         assertThat(result.transfer().id()).isEqualTo(7L);
         verify(transactionExecutor, times(3)).execute(request, "key-1");
         assertThat(counter("transfers.lock_retries")).isEqualTo(2.0);
+    }
+
+    @Test
+    void retriesWhenTheAttemptLostADeadlock() {
+        when(transferRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(transactionExecutor.execute(request, "key-1"))
+                .thenThrow(new CannotAcquireLockException("ERROR: deadlock detected"))
+                .thenReturn(transfer(7L, "10.00"));
+
+        TransferCreationResult result = transferService.createTransfer(request, "key-1");
+
+        assertThat(result.transfer().id()).isEqualTo(7L);
+        assertThat(result.replayed()).isFalse();
+        verify(transactionExecutor, times(2)).execute(request, "key-1");
+        assertThat(counter("transfers.lock_retries")).isEqualTo(1.0);
     }
 
     @Test
