@@ -1,0 +1,40 @@
+# Ephemeral environment for the smoke test (scripts/smoke-ephemeral.sh, run by CI and CD):
+# an already-built image of the app plus the services it needs. Unlike docker-compose.yml it
+# builds nothing, runs the default (production) profile, so no dev key is seeded, and keeps
+# no volumes.
+#   IMAGE=ghcr.io/viache25/transfer-api:latest docker compose -f docker-compose.smoke.yml up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: transferapi
+      POSTGRES_USER: transferapi
+      POSTGRES_PASSWORD: transferapi
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transferapi"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: ${IMAGE:?set IMAGE to the image under test}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/transferapi
+      SPRING_DATASOURCE_USERNAME: transferapi
+      SPRING_DATASOURCE_PASSWORD: transferapi
+      SPRING_DATA_REDIS_HOST: redis
+    ports:
+      - "${SMOKE_PORT:-8080}:8080"

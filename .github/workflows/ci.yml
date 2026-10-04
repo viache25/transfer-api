@@ -69,11 +69,11 @@ jobs:
             build/reports/jacoco/
           retention-days: 14
 
-  # Builds the production image exactly like cd.yml does, but never pushes it.
-  # CD only runs after merge (workflow_run), so without this job a broken
-  # Dockerfile would only show up once it is already on main.
+  # Builds the production image exactly like cd.yml does, but never pushes it,
+  # and smoke-tests it. CD only runs after merge (workflow_run), so without this
+  # job a broken Dockerfile or image would only show up once it is on main.
   docker-image:
-    name: Docker image (build only)
+    name: Docker image (build + smoke test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -89,3 +89,8 @@ jobs:
       # (no Main-Class) would fail here.
       - name: Check app.jar is the Spring Boot jar
         run: docker run --rm --entrypoint java transfer-api:ci -Djarmode=tools -jar app.jar list-layers
+
+      # Same smoke test CD runs against the published image: start this image with
+      # PostgreSQL + Redis, provision a terminal key, run scripts/smoke.sh.
+      - name: Smoke test the image in an ephemeral environment
+        run: scripts/smoke-ephemeral.sh transfer-api:ci

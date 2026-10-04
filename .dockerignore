@@ -7,3 +7,5 @@ build/
 .vscode
 Dockerfile
 docker-compose.yml
+docker-compose.smoke.yml
+scripts/

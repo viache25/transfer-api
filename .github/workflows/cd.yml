@@ -18,6 +18,8 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       # Build exactly the commit CI tested, not whatever main points to by now.
       - uses: actions/checkout@v7
@@ -63,3 +65,23 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-image
+
+  # Ephemeral environment (D10): pull the image that was just published (by
+  # digest, so exactly that build), start it with PostgreSQL + Redis via
+  # docker compose, provision a terminal key and run scripts/smoke.sh against it.
+  smoke:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke test the published image
+        run: scripts/smoke-ephemeral.sh "ghcr.io/viache25/transfer-api@${{ needs.publish.outputs.digest }}"
