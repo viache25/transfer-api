@@ -1,0 +1,131 @@
+name: Load test
+
+# k6 load test (load/transfers.js) against the Docker Compose stack: N virtual terminals with
+# their own API keys send transfers, retry a share of them with the same Idempotency-Key, and a
+# ledger reconciliation at the end proves no money was created, lost or moved twice.
+#
+# Not part of CI: it builds the image and runs for a minute, and latency numbers from a shared
+# runner are too noisy to gate every pull request on. It runs weekly (to catch regressions and
+# drift, like nightly.yml and mutation.yml), on demand, and on pull requests that change the load
+# test itself, so a broken script can't be merged.
+on:
+  schedule:
+    - cron: '0 4 * * 0'   # Sundays 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      terminals:
+        description: Virtual terminals (one API key each)
+        default: '10'
+      duration:
+        description: How long the terminals send transfers
+        default: 60s
+  pull_request:
+    branches: [main]
+    paths:
+      - 'load/**'
+      - '.github/workflows/load.yml'
+
+concurrency:
+  group: load-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TERMINALS: ${{ inputs.terminals || '10' }}
+      DURATION: ${{ inputs.duration || '60s' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: '2.3.0'
+
+      # The same stack as `docker compose up` (dev profile), minus Prometheus and Grafana.
+      - name: Start the stack
+        run: docker compose up -d --build --quiet-pull postgres redis app
+
+      - name: Wait for the app
+        run: |
+          for _ in $(seq 1 90); do
+            if curl -fsS http://localhost:8080/actuator/health; then exit 0; fi
+            sleep 2
+          done
+          echo "app did not become healthy" >&2
+          exit 1
+
+      # One terminal (and so one rate-limit bucket) per virtual terminal. Throwaway keys on a
+      # throwaway stack, masked anyway.
+      - name: Provision one API key per terminal
+        run: |
+          keys="$(load/provision-terminals.sh "$TERMINALS")"
+          for key in ${keys//,/ }; do echo "::add-mask::$key"; done
+          echo "API_KEYS=$keys" >> "$GITHUB_ENV"
+
+      - name: Run k6
+        env:
+          K6_WEB_DASHBOARD: 'true'
+          K6_WEB_DASHBOARD_EXPORT: build/reports/k6/report.html
+        run: |
+          mkdir -p build/reports/k6
+          k6 run --summary-export build/reports/k6/summary.json load/transfers.js
+
+      - name: Load test summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
+          import json
+          m = json.load(open('build/reports/k6/summary.json'))['metrics']
+          def get(name, *fields):
+              v = m.get(name, {})
+              v = v.get('values', v)
+              for f in fields:
+                  if f in v:
+                      return v[f]
+              return None
+          dur = 'http_req_duration{scenario:terminals}'
+          reqs = 'http_reqs{scenario:terminals}'
+          failed = get('http_req_failed{scenario:terminals}', 'value', 'rate')
+          rows = [
+              ('requests (terminals scenario)', get(reqs, 'count')),
+              ('throughput (req/s)', round(get(reqs, 'rate') or 0, 1)),
+              ('p95 latency (ms)', round(get(dur, 'p(95)') or 0, 1)),
+              ('p99 latency (ms)', round(get(dur, 'p(99)') or 0, 1)),
+              ('error rate', f'{(failed or 0):.2%}'),
+          ] + [(n, get(n, 'count')) for n in (
+              'transfers_created', 'transfers_recovered', 'replays_ok', 'races_ok', 'transient_retries',
+              'ledger_transfers', 'idempotency_violations', 'ledger_violations')]
+          print('### k6 load test\n\n| Metric | Value |\n|---|---|')
+          for name, value in rows:
+              print(f'| {name} | {0 if value is None else value} |')
+          PY
+
+      # What the app logged during the run, also on success: a passing run may still have had a
+      # few failed requests within the error budget. Unique-key violations are expected (the
+      # concurrent same-key pairs), so they are only counted.
+      - name: App errors and warnings
+        if: always()
+        run: |
+          docker compose logs --no-color app > app.log
+          echo "expected duplicate-key races: $(grep -c 'violates unique constraint "uq_transfers_idempotency_key"' app.log || true)"
+          echo "--- other warnings ---"
+          grep -E ' WARN ' app.log | grep -v -E 'SQLState: 23505|uq_transfers_idempotency_key|SpringDoc' | head -n 60 || true
+          echo "--- errors ---"
+          grep -E -A 40 ' ERROR ' app.log | head -n 400 || true
+
+      - name: Upload k6 report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: k6-report
+          path: build/reports/k6/
+          retention-days: 14
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
