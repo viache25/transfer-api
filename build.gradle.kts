@@ -56,6 +56,7 @@ configurations[apiTest.runtimeOnlyConfigurationName].extendsFrom(configurations.
 
 dependencies {
     "apiTestImplementation"("io.rest-assured:rest-assured:6.0.0")
+    "apiTestImplementation"("org.testcontainers:testcontainers-toxiproxy")
 }
 
 val apiTestTask = tasks.register<Test>("apiTest") {
@@ -68,6 +69,10 @@ val apiTestTask = tasks.register<Test>("apiTest") {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // One line per test in the build log, so CI output shows which tests actually ran.
+    testLogging {
+        events("passed", "skipped", "failed")
+    }
 }
 
 tasks.test {
