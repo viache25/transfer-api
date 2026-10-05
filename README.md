@@ -122,7 +122,7 @@ flowchart TB
         F["ApiKeyAuthenticationFilter<br/><i>X-API-Key → SHA-256 → terminals</i>"]
         RL["RateLimitFilter<br/><i>Bucket4j bucket per terminal</i>"]
         F --> RL
-        UL["/ui login form<br/><i>same key → session + CSRF</i>"]
+        UL["Login form at /ui<br/><i>same key → session + CSRF</i>"]
     end
 
     subgraph web ["web — thin controllers"]
@@ -150,6 +150,13 @@ flowchart TB
     REDIS[(Redis 7<br/>optional cache)]
     PROM[Prometheus] --> GRAF[Grafana]
 
+    subgraph harness ["test clients outside the app"]
+        TOX["Toxiproxy<br/><i>cuts the response after the commit</i>"]
+        K6["k6<br/><i>10 terminals, same-key retries</i>"]
+        SMK["smoke.sh<br/><i>the built / published image</i>"]
+        PW["Playwright<br/><i>headless Chromium</i>"]
+    end
+
     Client --> F --> AC & TC
     Browser([Browser]) --> UL --> UI --> AS & TS
     AC --> AS --> DX --> ACC & DEP
@@ -158,6 +165,8 @@ flowchart TB
     F & UL --> TER
     ACC & TRF & DEP & TER --> DB
     PROM -. scrapes /actuator/prometheus .-> TS
+    TOX & K6 & SMK -.-> F
+    PW -.-> UL
 ```
 
 The POS terminal on the left is a conceptual client. Its behaviour on a flaky
@@ -165,7 +174,10 @@ network (a lost response, then a retry with the same key) is exercised by the
 Toxiproxy network-failure test in `src/apiTest`. A fleet of them under load,
 retrying with the same key, is simulated by the k6 load test in `load/`. The
 browser at `/ui` is a single server-rendered terminal page (D9), the target of
-the UI tests. It calls the same services as the REST controllers.
+the Playwright UI tests. It calls the same services as the REST controllers.
+`scripts/smoke.sh` checks the real Docker image end to end on every PR and
+after every release. The dotted "test clients" in the diagram are all of
+these.
 
 - **`domain/`**: JPA entities. `Account` owns its invariants (`debit()`
   throws instead of letting a service skip a balance check).
@@ -439,12 +451,15 @@ the HTML report as an artifact.
 
 | Metric | Value |
 |---|---|
-| Mutants generated | 81 |
-| Mutation coverage (killed / all) | 73 / 81 = **90%** |
-| Test strength (killed / mutants reached by a test) | 73 / 73 = **100%** |
-| Line coverage of the mutated classes | 156 / 177 = 88% |
+| Mutants generated | 82 |
+| Mutation coverage (detected / all) | 74 / 82 = **90%** |
+| Test strength (detected / mutants reached by a test) | 74 / 74 = **100%** |
+| Line coverage of the mutated classes | 159 / 180 = 88% |
 
-Measured on 2026-10-04. The first run found one surviving mutant: changing
+Measured on 2026-10-05 (run 37270441812). Of the 74 detected mutants, 72 were
+killed by a failing test. The other 2 timed out: removing `++failedAttempts`
+from a retry loop makes it spin forever, which PIT counts as detected. The
+first run (2026-10-04) found one surviving mutant: changing
 `balance < amount` to `balance <= amount` in `Account.debit()` went unnoticed,
 because no test debited the exact balance. A boundary test now kills it. The 8
 remaining mutants are never reached by a unit test: simple getters and two
@@ -521,7 +536,7 @@ smoke test and tears everything down.
 ## Repository layout
 
 ```
-.github/workflows/   CI and CD pipelines
+.github/workflows/   CI, CD, nightly, mutation-testing and load-test workflows
 src/main/java/...    web · service · domain · repository · dto · exception · config
 src/main/resources/  application.properties, Flyway migrations (V1–V3), Thymeleaf templates + CSS of the /ui page
 src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
@@ -569,13 +584,15 @@ Actuator · Micrometer · Prometheus · Grafana
 - [x] Actuator, custom metrics, Prometheus + Grafana dashboard
 - [x] Redis read-through cache for transfer idempotency lookups (DB stays source of truth)
 - [x] Per-terminal rate limiting (Bucket4j, 20 req/s, 429 with `Retry-After`)
+- [x] Deadlock-free transfers: account rows are locked in id order (found by the k6 load test)
 
 **Phases**
 - Phase 1 (core: idempotency, optimistic-lock retry, concurrency tests, Docker, CI/CD): done
 - Phase 2 (security, Testcontainers, observability, Redis cache, rate limiting): done
 - Phase 3 (POS-terminal client): done differently. Per D8 the C client was replaced by a Java network-failure test with Toxiproxy
+- Extensions (exact replay, REST Assured, PIT, Toxiproxy, k6, the `/ui` page, Playwright, ephemeral smoke test): done
 
-**Next**
+**Extension plan (steps 17–24 of issue #1, all done; 13–15 skipped per D8)**
 - [x] Exact replay bodies and fixed two-decimal money scale
 - [x] REST Assured API tests with an OpenAPI contract check
 - [x] Mutation testing with PIT (`./gradlew pitest`, not part of `check`)

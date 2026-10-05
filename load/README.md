@@ -95,15 +95,15 @@ shared runner is too noisy to block unrelated changes on.
 Measured on a GitHub-hosted `ubuntu-latest` runner: 10 terminals, 20 accounts, 60s, with the app,
 PostgreSQL and Redis on the same machine as k6.
 
-| Metric | PR #33 (after the deadlock fix) | PR #32 (first runs) |
-|---|---|---|
-| Requests (terminals scenario) | 6,906 (112 req/s) | 6,746 (109 req/s) |
-| p95 / p99 / max latency | 11.9 ms / 25.0 ms / 646 ms | 11.2 ms / 27.6 ms / 1.03 s |
-| Error rate | 0.13% (9 × `409 Concurrent Modification`) | 0.25% (15 × `409`, 2 × `401`) |
-| Transfers in the ledger | 5,544 (= transfers answered `201`) | 5,384 (= transfers answered `201`) |
-| Same-key retries answered with the original id | 1,078 sequential, 275 concurrent pairs | 1,075 sequential, 270 concurrent pairs |
-| Idempotency / ledger violations | 0 / 0 | 0 / 0 |
-| PostgreSQL deadlocks in the app log | 0 | 2 |
+| Metric | `main` after merge (run 37238169016) | PR #33 (after the deadlock fix) | PR #32 (first runs) |
+|---|---|---|---|
+| Requests (terminals scenario) | 6,938 (112 req/s) | 6,906 (112 req/s) | 6,746 (109 req/s) |
+| p95 / p99 / max latency | 11.2 ms / 21.7 ms / 667 ms | 11.9 ms / 25.0 ms / 646 ms | 11.2 ms / 27.6 ms / 1.03 s |
+| Error rate | 0.04% (3 × `409 Concurrent Modification`) | 0.13% (9 × `409`) | 0.25% (15 × `409`, 2 × `401`) |
+| Transfers in the ledger (= answered `201`) | 5,537 | 5,544 | 5,384 |
+| Same-key retries answered with the original id | 1,119 sequential, 279 concurrent pairs | 1,078 sequential, 275 concurrent pairs | 1,075 sequential, 270 concurrent pairs |
+| Idempotency / ledger violations | 0 / 0 | 0 / 0 | 0 / 0 |
+| PostgreSQL deadlocks in the app log | 0 | 0 | 2 |
 
 The `409 Concurrent Modification` answers are expected under this much contention (10 terminals,
 20 accounts): all 3 optimistic-lock attempts lost, the API asked the client to retry, and the
