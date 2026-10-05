@@ -351,7 +351,7 @@ HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
 
 JaCoCo measures coverage on every test run. `./gradlew check` (and therefore
 `build` and CI) fails if line coverage drops below **85%** or branch coverage
-below **80%**. Current values: line 88%, branch 84%. The floors sit a few
+below **80%**. Current values: line 94%, branch 88%. The floors sit a few
 points below the measured values so a small refactor doesn't break the build,
 but a feature merged without tests does.
 
