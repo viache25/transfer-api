@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-80%20automated-25A162?logo=junit5&logoColor=white" alt="80 automated tests">
+  <img src="https://img.shields.io/badge/tests-108%20automated-25A162?logo=junit5&logoColor=white" alt="108 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
@@ -46,10 +46,10 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 52 unit tests (JUnit 5 + Mockito), 19 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit; a k6 load test with deliberate same-key retries that reconciles the ledger afterwards |
+| **Testing** | 69 unit tests (JUnit 5 + Mockito), 30 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit; a k6 load test with deliberate same-key retries that reconciles the ledger afterwards |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) and smoke-tested |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab), then starts the published image in an ephemeral Docker Compose environment and smoke-tests it |
-| **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
+| **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; the terminal UI page signs in with the same key into a CSRF-protected server-side session; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
 | **API contract** | OpenAPI 3 spec and Swagger UI; all errors as RFC 7807 `application/problem+json` |
 | **Observability** | Actuator health, Micrometer business counters, Prometheus scraping, pre-provisioned Grafana dashboard with latency percentiles |
 | **Data** | Schema owned by Flyway migrations; Hibernate runs in `validate` mode only |
@@ -122,11 +122,13 @@ flowchart TB
         F["ApiKeyAuthenticationFilter<br/><i>X-API-Key → SHA-256 → terminals</i>"]
         RL["RateLimitFilter<br/><i>Bucket4j bucket per terminal</i>"]
         F --> RL
+        UL["/ui login form<br/><i>same key → session + CSRF</i>"]
     end
 
     subgraph web ["web — thin controllers"]
         AC[AccountController]
         TC[TransferController]
+        UI["TerminalUiController<br/><i>/ui · Thymeleaf, no JS</i>"]
     end
 
     subgraph service ["service — business logic"]
@@ -149,10 +151,11 @@ flowchart TB
     PROM[Prometheus] --> GRAF[Grafana]
 
     Client --> F --> AC & TC
+    Browser([Browser]) --> UL --> UI --> AS & TS
     AC --> AS --> DX --> ACC & DEP
     TC --> TS --> TX --> ACC & TRF
     TS --> RC -.-> REDIS
-    F --> TER
+    F & UL --> TER
     ACC & TRF & DEP & TER --> DB
     PROM -. scrapes /actuator/prometheus .-> TS
 ```
@@ -160,7 +163,9 @@ flowchart TB
 The POS terminal on the left is a conceptual client. Its behaviour on a flaky
 network (a lost response, then a retry with the same key) is exercised by the
 Toxiproxy network-failure test in `src/apiTest`. A fleet of them under load,
-retrying with the same key, is simulated by the k6 load test in `load/`.
+retrying with the same key, is simulated by the k6 load test in `load/`. The
+browser at `/ui` is a single server-rendered terminal page (D9), the target of
+the UI tests. It calls the same services as the REST controllers.
 
 - **`domain/`**: JPA entities. `Account` owns its invariants (`debit()`
   throws instead of letting a service skip a balance check).
@@ -168,7 +173,9 @@ retrying with the same key, is simulated by the k6 load test in `load/`.
   are the `@Transactional` unit of work; `TransferService` and `AccountService`
   orchestrate replay and retry *around* them and are deliberately **not**
   transactional, because each retry needs its own fresh transaction.
-- **`web/`**: thin controllers, validation and status codes only.
+- **`web/`**: thin controllers, validation and status codes only. `web/ui/`
+  holds the terminal page controller (Thymeleaf templates in
+  `src/main/resources/templates/ui/`).
 - **`exception/`**: domain exceptions mapped to
   [RFC 7807](https://www.rfc-editor.org/rfc/rfc9457) `ProblemDetail`
   responses by one `@RestControllerAdvice`.
@@ -190,6 +197,7 @@ The schema lives entirely in Flyway migrations
 | `POST` | `/accounts/{id}/deposit` | Deposit funds (idempotent when an `Idempotency-Key` header is supplied) |
 | `POST` | `/transfers` | Transfer between two accounts (requires `Idempotency-Key`) |
 | `GET` | `/transfers?accountId=&page=` | Paginated transfer history for an account |
+| `GET` | `/ui` | Terminal page (HTML, sign-in with the API key): accounts, a transfer form, "retry with same key", history |
 
 Interactive docs: **`/swagger-ui.html`** (Swagger UI) and **`/v3/api-docs`**
 (OpenAPI JSON). Both are public; the `X-API-Key` scheme and the
@@ -245,7 +253,8 @@ Every endpoint except `/actuator/health`, `/actuator/prometheus`,
 `/v3/api-docs/**` and `/swagger-ui/**` requires a per-terminal API key in the
 `X-API-Key` header. Keys are stored only as SHA-256 hashes in the `terminals`
 table and checked by a stateless Spring Security filter. A missing or unknown
-key gets a `401` RFC 7807 response.
+key gets a `401` RFC 7807 response. The `/ui` pages take the same key through
+a login form instead of the header (see [Terminal UI](#terminal-ui-ui)).
 
 Each terminal is also rate limited (Bucket4j token bucket, 20 requests per
 second by default, configurable via `app.rate-limit.requests-per-second`).
@@ -257,6 +266,27 @@ The `dev` Spring profile (enabled in `docker-compose.yml`) seeds one terminal
 with the key `dev-local-terminal-key`. That seeder never runs outside `dev`.
 In other environments, add a terminal by inserting its name and key hash
 (see [Deploying to a server](#deploying-to-a-server)).
+
+### Terminal UI (`/ui`)
+
+`/ui` is one server-rendered page (Thymeleaf, no JavaScript, no build step).
+It exists as a target for the Playwright UI tests (D9), not as a product. It
+lists the newest accounts, sends a transfer with a freshly generated
+`Idempotency-Key`, offers **Retry with the same key** for the last attempt
+(a replay shows `Replayed (200)` with the same transfer id), and shows an
+account's transfer history.
+
+A browser can't attach an `X-API-Key` header to page loads and form posts, so
+the page has its own small login. The terminal types its API key once into
+`/ui/login`. The key is checked exactly like the header (SHA-256 hash lookup
+in `terminals`), and the server keeps the authenticated terminal in an HTTP
+session. The key never goes into a cookie, local storage or a URL. The session
+cookie is `HttpOnly` and `SameSite=Strict` (add `Secure` behind TLS with
+`server.servlet.session.cookie.secure=true`), and its id is rotated at login.
+Because a session cookie is sent automatically, every form post carries a CSRF
+token. A strict Content-Security-Policy allows no scripts at all. The UI has
+its own security filter chain for `/ui/**` only: the JSON API stays stateless
+and still accepts nothing but `X-API-Key`, so a UI session can't call it.
 
 ## Quickstart
 
@@ -272,6 +302,7 @@ scripts/smoke.sh   # optional, in a second terminal: 7 end-to-end checks against
 |---|---|
 | API | http://localhost:8080 |
 | Swagger UI | http://localhost:8080/swagger-ui.html |
+| Terminal UI (sign in with `dev-local-terminal-key`) | http://localhost:8080/ui |
 | Grafana (dashboard "Transfer API") | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 | Redis (idempotency cache) | localhost:6379 |
@@ -302,7 +333,8 @@ docker compose up -d postgres redis
 ./gradlew test --tests "com.slavaslava.transferapi.service.*" \
                --tests "com.slavaslava.transferapi.domain.*" \
                --tests "com.slavaslava.transferapi.dto.*" \
-               --tests "com.slavaslava.transferapi.config.*"   # unit tests only, no Docker
+               --tests "com.slavaslava.transferapi.config.*" \
+               --tests "com.slavaslava.transferapi.web.*"      # unit tests only, no Docker
 ./gradlew apiTest   # REST Assured API tests only; needs Docker
 ./gradlew build     # compile + all tests (incl. apiTest) + package (what CI runs)
 ./gradlew pitest    # mutation testing of service/ and domain/ (unit tests only, no Docker)
@@ -319,7 +351,7 @@ HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
 
 JaCoCo measures coverage on every test run. `./gradlew check` (and therefore
 `build` and CI) fails if line coverage drops below **85%** or branch coverage
-below **80%**. Current values: line 88%, branch 84%. The floors sit a few
+below **80%**. Current values: line 94%, branch 88%. The floors sit a few
 points below the measured values so a small refactor doesn't break the build,
 but a feature merged without tests does.
 
@@ -331,8 +363,8 @@ system-level guarantees against a real database.
 
 | Level | Count | Tools | What it proves |
 |---|---|---|---|
-| **Unit** | 52 | JUnit 5, Mockito, AssertJ | Every branch of replay, retry and race handling (including a deadlock victim being retried); validation rules; account invariants; rate-limit buckets and the 429 filter |
-| **Integration** | 19 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database, including the row-lock order that keeps opposite transfers from deadlocking |
+| **Unit** | 69 | JUnit 5, Mockito, AssertJ, standalone MockMvc | Every branch of replay, retry and race handling (including a deadlock victim being retried); validation rules; account invariants; rate-limit buckets and the 429 filter; the terminal page controller and its Thymeleaf templates with mocked services |
+| **Integration** | 30 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database, including the row-lock order that keeps opposite transfers from deadlocking; the terminal page with its real security chain (API-key login, session, CSRF, CSP) |
 | **API** | 9 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers, Toxiproxy | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, a contract check of every response against `/v3/api-docs`, and a lost response after the commit recovered by a same-key retry |
 | **Smoke** | 7 checks | Bash, curl, jq, Docker Compose | The real Docker image, started with PostgreSQL and Redis in the production profile: health, 401, accounts, transfer, same-key replay (balances moved once), key reuse 422. Runs on every PR (locally built image) and after every release (published image) |
 | **Load** | 1 scenario | k6, Docker Compose | 10 terminals with their own API keys for 60s; 20% of transfers retried with the same key, 5% sent twice concurrently. Thresholds: p95 latency, error rate < 1%, zero idempotency violations, and a ledger reconciliation afterwards (total conserved, every balance explained by the recorded transfers, no key executed twice). Weekly, on demand, and on PRs that touch `load/` ([details and results](load/README.md)) |
@@ -363,6 +395,11 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 **Security**
 - No API key → 401 ProblemDetail; unknown key → 401; valid key → accepted
 - A server error inside an authorized request is reported as itself (500), not as a 401 from the error page
+
+**Terminal UI (`/ui`, MockMvc)**
+- Without a session every page redirects to the login form; an `X-API-Key` header doesn't open it
+- The right API key starts a session; an unknown or missing key is rejected; forms without a CSRF token get 403; logout ends the session
+- A transfer is shown with its id; **Retry with the same key** shows `Replayed (200)` with the same id and the money moved once; insufficient funds is shown as an error message; the history lists the account's transfers
 - A terminal exceeding its request rate gets 429 ProblemDetail with `Retry-After`; other terminals are unaffected
 
 **API tests (`src/apiTest`, task `apiTest`, wired into `check`)**
@@ -409,7 +446,7 @@ tests, so it can't see those.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>80 tests · coverage gate<br/>image build + smoke test"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>108 tests · coverage gate<br/>image build + smoke test"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -476,7 +513,7 @@ smoke test and tears everything down.
 ```
 .github/workflows/   CI and CD pipelines
 src/main/java/...    web · service · domain · repository · dto · exception · config
-src/main/resources/  application.properties, Flyway migrations (V1–V3)
+src/main/resources/  application.properties, Flyway migrations (V1–V3), Thymeleaf templates + CSS of the /ui page
 src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
 src/apiTest/java/... REST Assured API tests, OpenAPI contract check, Toxiproxy network-failure test
 ops/                 Prometheus scrape config, Grafana provisioning and dashboard
@@ -491,7 +528,8 @@ CLAUDE.md            implementation notes and stack-specific gotchas
 ## Tech stack
 
 **Application:** Java 21 · Spring Boot 4.1 / Spring Framework 7 · Spring Data
-JPA / Hibernate 7 · Spring Security · Bucket4j · Jackson 3 · Bean Validation
+JPA / Hibernate 7 · Spring Security · Bucket4j · Jackson 3 · Bean Validation ·
+Thymeleaf (one test-target page)
 
 **Data:** PostgreSQL 16 · Flyway · Redis 7 (Spring Data Redis / Lettuce)
 
@@ -531,8 +569,9 @@ Actuator · Micrometer · Prometheus · Grafana
 - [x] Mutation testing with PIT (`./gradlew pitest`, not part of `check`)
 - [x] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry returns the same transfer
 - [x] k6 load test with deliberate same-key retries and a ledger reconciliation afterwards
-- [ ] A single server-rendered test-target page and Playwright UI tests
+- [x] A single server-rendered test-target page (`/ui`, Thymeleaf, signed in with the terminal's API key)
+- [ ] Playwright UI tests against that page
 - [x] Ephemeral-environment smoke test against the published image (CD) and the PR image (CI)
 
-Out of scope by design: message brokers, microservices, a frontend,
-Kubernetes, currency conversion.
+Out of scope by design: message brokers, microservices, a frontend (beyond
+the single test-target page from D9), Kubernetes, currency conversion.

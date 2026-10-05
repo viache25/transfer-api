@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Terminal sign-in · Transfer API</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" th:href="@{/ui/ui.css}">
+</head>
+<body>
+<main class="narrow">
+  <h1>Terminal sign-in</h1>
+  <p class="muted">Enter this terminal's API key, the same key it sends as <code>X-API-Key</code>.
+    The server checks it against the stored hash and keeps a session for this browser; the key itself
+    is not stored in the browser.</p>
+  <p th:if="${param.error}" class="notice error" role="alert" data-testid="login-error">Unknown API key.</p>
+  <p th:if="${param.logout}" class="notice" role="status" data-testid="logged-out">Signed out.</p>
+  <form method="post" th:action="@{/ui/login}" class="stack">
+    <label for="apiKey">API key</label>
+    <input id="apiKey" name="apiKey" type="password" autocomplete="off" required autofocus>
+    <button type="submit" data-testid="sign-in">Sign in</button>
+  </form>
+</main>
+</body>
+</html>

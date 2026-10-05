@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Terminal · Transfer API</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" th:href="@{/ui/ui.css}">
+</head>
+<body>
+<header class="bar">
+  <h1>Terminal</h1>
+  <p>Signed in as <strong data-testid="terminal-name" th:text="${terminal}">terminal</strong></p>
+  <form method="post" th:action="@{/ui/logout}">
+    <button type="submit" class="secondary" data-testid="sign-out">Sign out</button>
+  </form>
+</header>
+<main>
+  <section th:if="${result != null}" class="notice ok" role="status" data-testid="result">
+    <p>
+      <strong data-testid="result-status" th:text="${result.replayed() ? 'Replayed (200)' : 'Created (201)'}">Created (201)</strong>
+      transfer <strong>#<span data-testid="transfer-id" th:text="${result.transfer().id()}">1</span></strong>:
+      <span th:text="|${result.transfer().amount()} from account #${result.transfer().fromAccountId()} to #${result.transfer().toAccountId()}|">30.00 from account #1 to #2</span>
+    </p>
+    <p th:if="${result.replayed()}" class="muted">This key was seen before: the stored result was returned and nothing was executed again.</p>
+    <p class="muted">Idempotency-Key <code data-testid="result-key" th:text="${result.transfer().idempotencyKey()}">key</code></p>
+  </section>
+
+  <section th:if="${error != null}" class="notice error" role="alert" data-testid="error">
+    <p><strong data-testid="error-title" th:text="${error.title()}">Error</strong>:
+      <span data-testid="error-detail" th:text="${error.detail()}">detail</span></p>
+  </section>
+
+  <form th:if="${last != null}" method="post" th:action="@{/ui/transfers}" class="retry">
+    <input type="hidden" name="fromAccountId" th:value="${last.fromAccountId()}">
+    <input type="hidden" name="toAccountId" th:value="${last.toAccountId()}">
+    <input type="hidden" name="amount" th:value="${last.amount()}">
+    <input type="hidden" name="idempotencyKey" th:value="${last.idempotencyKey()}">
+    <button type="submit" data-testid="retry">Retry with the same key</button>
+    <span class="muted">Sends the last request again, as a terminal does when it never saw the answer.</span>
+  </form>
+
+  <div class="grid">
+    <section>
+      <h2>New transfer</h2>
+      <form method="post" th:action="@{/ui/transfers}" class="stack" data-testid="transfer-form">
+        <label for="fromAccountId">From</label>
+        <select id="fromAccountId" name="fromAccountId" required>
+          <option th:each="a : ${accounts}" th:value="${a.id()}"
+                  th:text="|#${a.id()} ${a.owner()} (${a.balance()} ${a.currency()})|">#1 Alice (100.00 EUR)</option>
+        </select>
+        <label for="toAccountId">To</label>
+        <select id="toAccountId" name="toAccountId" required>
+          <option th:each="a : ${accounts}" th:value="${a.id()}"
+                  th:text="|#${a.id()} ${a.owner()} (${a.balance()} ${a.currency()})|">#2 Bob (0.00 EUR)</option>
+        </select>
+        <label for="amount">Amount</label>
+        <input id="amount" name="amount" type="number" min="0.01" step="0.01" required>
+        <label for="idempotencyKey">Idempotency-Key <span class="muted">(a new one for every transfer)</span></label>
+        <input id="idempotencyKey" name="idempotencyKey" type="text" maxlength="255" required
+               th:value="${form.idempotencyKey()}">
+        <button type="submit" data-testid="send">Send transfer</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Accounts</h2>
+      <p th:if="${accounts.isEmpty()}" class="muted">No accounts yet. Open one with <code>POST /accounts</code>.</p>
+      <table th:unless="${accounts.isEmpty()}" data-testid="accounts">
+        <thead><tr><th>#</th><th>Owner</th><th class="num">Balance</th><th></th></tr></thead>
+        <tbody>
+        <tr th:each="a : ${accounts}" th:attr="data-account-id=${a.id()}">
+          <td th:text="${a.id()}">1</td>
+          <td th:text="${a.owner()}">Alice</td>
+          <td class="num" data-testid="balance" th:text="|${a.balance()} ${a.currency()}|">100.00 EUR</td>
+          <td><a th:href="@{/ui(accountId=${a.id()})}">History</a></td>
+        </tr>
+        </tbody>
+      </table>
+      <p class="muted" th:text="|The ${accounts.size()} newest accounts.|">The 2 newest accounts.</p>
+    </section>
+  </div>
+
+  <section th:if="${historyAccountId != null}" data-testid="history">
+    <h2 th:text="|History of account #${historyAccountId}|">History of account #1</h2>
+    <p th:if="${history.isEmpty()}" class="muted">No transfers yet.</p>
+    <table th:unless="${history.isEmpty()}">
+      <thead>
+      <tr><th>#</th><th>From</th><th>To</th><th class="num">Amount</th><th>Idempotency-Key</th><th>Created (UTC)</th></tr>
+      </thead>
+      <tbody>
+      <tr th:each="t : ${history}" th:attr="data-transfer-id=${t.id()}">
+        <td th:text="${t.id()}">1</td>
+        <td th:text="|#${t.fromAccountId()}|">#1</td>
+        <td th:text="|#${t.toAccountId()}|">#2</td>
+        <td class="num" th:text="${t.amount()}">30.00</td>
+        <td><code th:text="${t.idempotencyKey()}">key</code></td>
+        <td th:text="${t.createdAt()}">2026-10-05T10:00:00Z</td>
+      </tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>

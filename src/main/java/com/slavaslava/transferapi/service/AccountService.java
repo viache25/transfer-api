@@ -11,10 +11,13 @@ import com.slavaslava.transferapi.repository.AccountRepository;
 import com.slavaslava.transferapi.repository.DepositRepository;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Service
 public class AccountService {
@@ -42,6 +45,14 @@ public class AccountService {
     @Transactional(readOnly = true)
     public AccountResponse getAccount(Long id) {
         return AccountResponse.from(findAccountOrThrow(id));
+    }
+
+    /** The newest {@code limit} accounts, newest first (used by the terminal UI's account list). */
+    @Transactional(readOnly = true)
+    public List<AccountResponse> listNewestAccounts(int limit) {
+        return accountRepository.findAll(PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "id")))
+                .map(AccountResponse::from)
+                .getContent();
     }
 
     // deliberately not @Transactional: each retry attempt must run in its own transaction

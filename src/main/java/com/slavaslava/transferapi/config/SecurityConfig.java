@@ -4,6 +4,8 @@ import com.slavaslava.transferapi.repository.TerminalRepository;
 import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
+import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
@@ -21,7 +23,45 @@ public class SecurityConfig {
             "/swagger-ui.html"
     };
 
+    /**
+     * The terminal UI pages under /ui (D9). A browser can't attach X-API-Key to page loads and form posts,
+     * so the terminal types its API key once into a login form. {@link TerminalApiKeyAuthenticationProvider}
+     * checks it exactly like the header (SHA-256 hash lookup in terminals), and the authenticated terminal
+     * is kept in a server-side HTTP session. The key itself is never stored in the browser: the session
+     * cookie only carries a random session id (HttpOnly, SameSite=Strict), and the id is changed at login.
+     * Because the session cookie is sent automatically, every form post is CSRF-protected (Spring Security's
+     * default, Thymeleaf adds the token to each th:action form). This chain only matches /ui/**; the JSON API
+     * stays stateless and accepts nothing but X-API-Key, so a UI session can't be used to call it.
+     */
     @Bean
+    @Order(1)
+    SecurityFilterChain uiSecurityFilterChain(HttpSecurity http, TerminalRepository terminalRepository) throws Exception {
+        http
+                .securityMatcher("/ui/**")
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/ui/ui.css").permitAll()
+                        .anyRequest().hasRole("TERMINAL"))
+                .authenticationManager(new ProviderManager(new TerminalApiKeyAuthenticationProvider(terminalRepository)))
+                // the form has one field, the key, posted as the "password"; there is no username field
+                .formLogin(form -> form
+                        .loginPage("/ui/login")
+                        .passwordParameter("apiKey")
+                        .defaultSuccessUrl("/ui", true)
+                        .failureUrl("/ui/login?error")
+                        .permitAll())
+                .logout(logout -> logout
+                        .logoutUrl("/ui/logout")
+                        .logoutSuccessUrl("/ui/login?logout")
+                        .permitAll())
+                // no scripts at all on these pages: only the same-origin stylesheet and same-origin form posts
+                .headers(headers -> headers.contentSecurityPolicy(csp -> csp.policyDirectives(
+                        "default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; "
+                                + "frame-ancestors 'none'; base-uri 'none'")));
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     SecurityFilterChain securityFilterChain(HttpSecurity http, TerminalRepository terminalRepository,
                                              RestAuthenticationEntryPoint entryPoint,
                                              TerminalRateLimiter rateLimiter, ObjectMapper objectMapper) throws Exception {

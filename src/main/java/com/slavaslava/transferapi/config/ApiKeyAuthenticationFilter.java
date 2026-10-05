@@ -31,10 +31,14 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         String apiKey = request.getHeader(API_KEY_HEADER);
         if (apiKey != null && !apiKey.isBlank()) {
             Optional<Terminal> terminal = terminalRepository.findByApiKeyHash(ApiKeyHasher.sha256Hex(apiKey));
-            terminal.ifPresent(t -> SecurityContextHolder.getContext().setAuthentication(
-                    UsernamePasswordAuthenticationToken.authenticated(
-                            t.getName(), null, List.of(new SimpleGrantedAuthority("ROLE_TERMINAL")))));
+            terminal.ifPresent(t -> SecurityContextHolder.getContext().setAuthentication(authenticated(t)));
         }
         filterChain.doFilter(request, response);
+    }
+
+    /** The authentication of a terminal whose key matched; shared with the /ui login. */
+    static UsernamePasswordAuthenticationToken authenticated(Terminal terminal) {
+        return UsernamePasswordAuthenticationToken.authenticated(
+                terminal.getName(), null, List.of(new SimpleGrantedAuthority("ROLE_TERMINAL")));
     }
 }
