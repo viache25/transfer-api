@@ -17,10 +17,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,6 +73,17 @@ class AccountServiceTest {
         accountService.createAccount(new CreateAccountRequest("Bob", new BigDecimal("250.00"), "USD"));
 
         assertThat(captor.getValue().getBalance()).isEqualByComparingTo("250.00");
+    }
+
+    @Test
+    void listNewestAccountsReturnsTheNewestFirstUpToTheLimit() {
+        when(accountRepository.findAll(PageRequest.of(0, 2, Sort.by(Sort.Direction.DESC, "id"))))
+                .thenReturn(new PageImpl<>(List.of(account(9L, "5.00"), account(8L, "1.00"))));
+
+        List<AccountResponse> accounts = accountService.listNewestAccounts(2);
+
+        assertThat(accounts).extracting(AccountResponse::id).containsExactly(9L, 8L);
+        assertThat(accounts.getFirst().balance()).isEqualByComparingTo("5.00");
     }
 
     @Test
