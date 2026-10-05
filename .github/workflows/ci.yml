@@ -54,8 +54,8 @@ jobs:
         uses: dorny/test-reporter@v3
         with:
           name: JUnit results
-          # unit + integration (test) and REST Assured API tests (apiTest)
-          path: build/test-results/test/*.xml,build/test-results/apiTest/*.xml
+          # unit + integration (test), REST Assured API tests (apiTest) and Playwright UI tests (uiTest)
+          path: build/test-results/test/*.xml,build/test-results/apiTest/*.xml,build/test-results/uiTest/*.xml
           reporter: java-junit
           use-actions-summary: false   # create a check run on the PR instead of only a job summary
 
@@ -64,9 +64,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: reports
+          # playwright/ only exists when a UI test failed: its screenshot and trace
           path: |
             build/reports/tests/
             build/reports/jacoco/
+            build/reports/playwright/
           retention-days: 14
 
   # Builds the production image exactly like cd.yml does, but never pushes it,

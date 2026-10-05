@@ -39,4 +39,5 @@ jobs:
           path: |
             build/reports/tests/
             build/reports/jacoco/
+            build/reports/playwright/
           retention-days: 14

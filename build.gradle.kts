@@ -68,6 +68,43 @@ val apiTestTask = tasks.register<Test>("apiTest") {
     shouldRunAfter(tasks.test)
 }
 
+// UI tests: Playwright for Java drives a headless Chromium through the /ui page of the app booted on a
+// random port (own Testcontainers PostgreSQL + Redis). Own source set and task; `check` depends on it.
+val uiTest: SourceSet by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+
+configurations[uiTest.implementationConfigurationName].extendsFrom(configurations.testImplementation.get())
+configurations[uiTest.runtimeOnlyConfigurationName].extendsFrom(configurations.testRuntimeOnly.get())
+
+dependencies {
+    "uiTestImplementation"("com.microsoft.playwright:playwright:1.63.0")
+}
+
+// Installs the Chromium build this Playwright version needs into ~/.cache/ms-playwright (a quick no-op
+// once it is there). On CI (the CI env var is set) it also installs Chromium's OS libraries via apt.
+val playwrightInstall = tasks.register<JavaExec>("playwrightInstall") {
+    description = "Installs the Chromium browser used by the Playwright UI tests."
+    group = "verification"
+    classpath = uiTest.runtimeClasspath
+    mainClass = "com.microsoft.playwright.CLI"
+    args = if (System.getenv("CI") != null) listOf("install", "--with-deps", "chromium") else listOf("install", "chromium")
+}
+
+val uiTestTask = tasks.register<Test>("uiTest") {
+    description = "Runs the Playwright UI tests."
+    group = "verification"
+    testClassesDirs = uiTest.output.classesDirs
+    classpath = uiTest.runtimeClasspath
+    shouldRunAfter(apiTestTask)
+    dependsOn(playwrightInstall)
+    // the browser comes from playwrightInstall; don't let Playwright.create() download every browser
+    environment("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")
+    // screenshots and traces of failed tests (CI uploads build/reports/playwright/)
+    systemProperty("playwright.reports", layout.buildDirectory.dir("reports/playwright").get().asFile.absolutePath)
+}
+
 tasks.withType<Test> {
     useJUnitPlatform()
     // One line per test in the build log, so CI output shows which tests actually ran.
@@ -107,7 +144,7 @@ tasks.jacocoTestCoverageVerification {
 }
 
 tasks.check {
-    dependsOn(tasks.jacocoTestCoverageVerification, apiTestTask)
+    dependsOn(tasks.jacocoTestCoverageVerification, apiTestTask, uiTestTask)
 }
 
 // Mutation testing: `./gradlew pitest` mutates service/ and domain/ and re-runs the
