@@ -160,7 +160,6 @@ class TerminalUiTest {
         page.getByTestId("retry").click();
 
         assertThat(page.getByTestId("result-status")).hasText("Replayed (200)");
-        assertThat(page.getByTestId("result-status")).hasText("TEMPORARY FAILURE: proves screenshot + trace upload");
         assertThat(page.getByTestId("transfer-id")).hasText(id);
         assertThat(page.getByTestId("result-key")).hasText(key);
         assertThat(balanceOf(alice)).hasText("70.00 EUR");

@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white" alt="Java 21">
   <img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 4.1">
   <img src="https://img.shields.io/badge/PostgreSQL-16%20%2B%20Flyway-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 + Flyway">
-  <img src="https://img.shields.io/badge/tests-108%20automated-25A162?logo=junit5&logoColor=white" alt="108 automated tests">
+  <img src="https://img.shields.io/badge/tests-112%20automated-25A162?logo=junit5&logoColor=white" alt="112 automated tests">
   <img src="https://img.shields.io/badge/Testcontainers-PostgreSQL-2496ED?logo=docker&logoColor=white" alt="Testcontainers">
   <img src="https://img.shields.io/badge/status-complete-25A162" alt="Status: complete">
 </p>
@@ -46,7 +46,7 @@ project, and the test suite is built to prove it.
 | Area | What's in place |
 |---|---|
 | **Correctness** | Idempotent transfers and deposits (`Idempotency-Key`), payload-mismatch rejection (422), optimistic locking with automatic retry, DB-level race backstop |
-| **Testing** | 69 unit tests (JUnit 5 + Mockito), 30 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit; a k6 load test with deliberate same-key retries that reconciles the ledger afterwards |
+| **Testing** | 69 unit tests (JUnit 5 + Mockito), 30 integration tests on a real PostgreSQL 16 and Redis 7 started by Testcontainers (including multi-threaded race tests), and 9 black-box API tests (REST Assured) checked against the app's own OpenAPI spec, including a network-failure test that cuts the response with Toxiproxy after the commit; 4 Playwright UI tests driving the `/ui` page in headless Chromium; a k6 load test with deliberate same-key retries that reconciles the ledger afterwards |
 | **CI** | GitHub Actions quality gate on every pull request and push to `main`: full suite, JaCoCo coverage floor (line ≥ 85%, branch ≥ 80%), JUnit results published on the PR, production Docker image built (not pushed) and smoke-tested |
 | **CD** | Runs only after CI is green on `main`; builds the exact tested commit into a multi-stage Docker image, publishes it to GitHub Container Registry tagged with the commit SHA, scans it with Trivy (results in the Security tab), then starts the published image in an ephemeral Docker Compose environment and smoke-tests it |
 | **Security** | Per-terminal API keys (`X-API-Key`), stored as SHA-256 hashes, enforced by a Spring Security filter; the terminal UI page signs in with the same key into a CSRF-protected server-side session; per-terminal rate limit (429 + `Retry-After`); 401s rendered as RFC 7807 |
@@ -336,7 +336,8 @@ docker compose up -d postgres redis
                --tests "com.slavaslava.transferapi.config.*" \
                --tests "com.slavaslava.transferapi.web.*"      # unit tests only, no Docker
 ./gradlew apiTest   # REST Assured API tests only; needs Docker
-./gradlew build     # compile + all tests (incl. apiTest) + package (what CI runs)
+./gradlew uiTest    # Playwright UI tests only; needs Docker (installs Chromium on first run)
+./gradlew build     # compile + all tests (incl. apiTest and uiTest) + package (what CI runs)
 ./gradlew pitest    # mutation testing of service/ and domain/ (unit tests only, no Docker)
 
 scripts/smoke.sh                       # smoke test against a running app (default: docker compose up on :8080)
@@ -345,7 +346,9 @@ k6 run -e API_KEYS="$(load/provision-terminals.sh 10)" load/transfers.js   # loa
 ```
 
 HTML reports after a run: `build/reports/tests/test/index.html` (tests) and
-`build/reports/jacoco/test/html/index.html` (coverage).
+`build/reports/jacoco/test/html/index.html` (coverage). A failed UI test leaves
+a full-page screenshot and a Playwright trace in `build/reports/playwright/`
+(open the trace at [trace.playwright.dev](https://trace.playwright.dev)).
 
 ### Coverage gate
 
@@ -366,6 +369,7 @@ system-level guarantees against a real database.
 | **Unit** | 69 | JUnit 5, Mockito, AssertJ, standalone MockMvc | Every branch of replay, retry and race handling (including a deadlock victim being retried); validation rules; account invariants; rate-limit buckets and the 429 filter; the terminal page controller and its Thymeleaf templates with mocked services |
 | **Integration** | 30 | `@SpringBootTest`, MockMvc, Testcontainers (PostgreSQL 16, Redis 7) | End-to-end HTTP behaviour, idempotency, security, and concurrency against a real database, including the row-lock order that keeps opposite transfers from deadlocking; the terminal page with its real security chain (API-key login, session, CSRF, CSP) |
 | **API** | 9 | REST Assured, `@SpringBootTest(RANDOM_PORT)`, Testcontainers, Toxiproxy | The real HTTP surface over a socket: status codes, `problem+json` bodies, replay, pagination, a contract check of every response against `/v3/api-docs`, and a lost response after the commit recovered by a same-key retry |
+| **UI** | 4 | Playwright for Java (headless Chromium), `@SpringBootTest(RANDOM_PORT)`, Testcontainers | The `/ui` terminal page in a real browser: sign in with the API key, a transfer shown with its id and in the history, **Retry with the same key** showing the same id with the money moved once, the insufficient-funds message, a rejected key. Screenshot + trace of every failure |
 | **Smoke** | 7 checks | Bash, curl, jq, Docker Compose | The real Docker image, started with PostgreSQL and Redis in the production profile: health, 401, accounts, transfer, same-key replay (balances moved once), key reuse 422. Runs on every PR (locally built image) and after every release (published image) |
 | **Load** | 1 scenario | k6, Docker Compose | 10 terminals with their own API keys for 60s; 20% of transfers retried with the same key, 5% sent twice concurrently. Thresholds: p95 latency, error rate < 1%, zero idempotency violations, and a ledger reconciliation afterwards (total conserved, every balance explained by the recorded transfers, no key executed twice). Weekly, on demand, and on PRs that touch `load/` ([details and results](load/README.md)) |
 
@@ -407,6 +411,12 @@ database, no leftover state, identical behaviour on a laptop and in CI.
 - Success responses are validated against the app's own `/v3/api-docs`: the operation must be documented and every declared response property present with the right JSON type
 - Network failure (`NetworkFailureIdempotencyApiTest`): Toxiproxy runs in a container between a JDK `HttpClient` "terminal" and the app. A `limit_data` toxic cuts the first response after the commit, then the same-key retry is checked to replay and not re-execute
 
+**UI tests (`src/uiTest`, task `uiTest`, wired into `check`)**
+- Sign in on `/ui/login` with the terminal's API key; a wrong key shows "Unknown API key."
+- A transfer shows `Created (201)` with its id, updates both balances and appears in the history
+- **Retry with the same key** shows `Replayed (200)` with the same transfer id and key, and the balances moved once
+- Insufficient funds shows the error message and leaves the balance untouched
+
 **Load (`load/transfers.js`, k6)**
 - Under concurrent load from 10 terminals, every same-key retry (sequential or concurrent) returns the original transfer id and never a second `201`
 - After the run, the total balance is conserved, every account's balance equals its opening balance plus its recorded transfers, and no `Idempotency-Key` appears twice
@@ -446,7 +456,7 @@ tests, so it can't see those.
 
 ```mermaid
 flowchart LR
-    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>108 tests · coverage gate<br/>image build + smoke test"]
+    PR[Pull request] --> CI["CI workflow<br/>JDK 21 · Gradle cache<br/>./gradlew build<br/>112 tests · coverage gate<br/>image build + smoke test"]
     CI -->|green| M[Merge to main]
     M --> CI2["CI on main"]
     CI2 -->|green: workflow_run| CD["CD workflow<br/>build tested SHA"]
@@ -458,7 +468,7 @@ flowchart LR
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit, integration and API tests, coverage gate, packaging). Publishes JUnit results (unit, integration and API tests) as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports as artifacts. A second job builds the production Docker image exactly like CD does, without pushing it, checks that it contains the executable Spring Boot jar and runs the same ephemeral-environment smoke test CD runs, so a broken `Dockerfile` or image fails the PR instead of the release. A newer push cancels the superseded run. A red build blocks the merge. |
+| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main`, push to `main`, manual | Sets up JDK 21 with Gradle caching, runs `./gradlew build` (compile, all unit, integration, API and Playwright UI tests, coverage gate, packaging; the build installs headless Chromium and its OS libraries itself). Publishes JUnit results (unit, integration, API and UI tests) as a check on the PR, writes a coverage summary to the run page, uploads HTML test and coverage reports, plus the screenshot and trace of any failed UI test, as artifacts. A second job builds the production Docker image exactly like CD does, without pushing it, checks that it contains the executable Spring Boot jar and runs the same ephemeral-environment smoke test CD runs, so a broken `Dockerfile` or image fails the PR instead of the release. A newer push cancels the superseded run. A red build blocks the merge. |
 | [`cd.yml`](.github/workflows/cd.yml) | CI finished successfully on `main` (`workflow_run`), manual | Checks out exactly the commit CI tested (`workflow_run.head_sha`), builds the multi-stage `Dockerfile` (Gradle `bootJar` build stage → slim JRE 21 runtime, non-root user; no tests in the image build, CI already ran them) and pushes it to GitHub Container Registry, tagged `latest` and with the short commit SHA for traceable rollbacks. Then scans the pushed image with Trivy (HIGH/CRITICAL, report-only for now) and uploads the SARIF report to the repository's Security tab. A second job (`smoke`) pulls the image it just pushed (by digest), starts it with PostgreSQL and Redis through `docker-compose.smoke.yml` in the production profile, provisions a terminal key in the database and runs `scripts/smoke.sh` against it (D10: an ephemeral environment instead of a paid server). A red CI run on `main` never produces an image. |
 | [`dependabot.yml`](.github/dependabot.yml) | Weekly | Opens update PRs for Gradle dependencies (minor/patch grouped into one PR), GitHub Actions versions and the Dockerfile base images. Each PR goes through the same CI gate, so an update that breaks a test or drops coverage can't be merged. |
 | [`nightly.yml`](.github/workflows/nightly.yml) | Daily 02:00 UTC, manual | Full `./gradlew build --rerun-tasks` with no task-cache hits, even when nothing was pushed. Catches flaky tests (the concurrency tests run every night, not only when code changes) and drift from outside the repo: new base images, dependency or Testcontainers changes. |
@@ -516,6 +526,7 @@ src/main/java/...    web · service · domain · repository · dto · exception 
 src/main/resources/  application.properties, Flyway migrations (V1–V3), Thymeleaf templates + CSS of the /ui page
 src/test/java/...    unit tests (service/, domain/) and integration tests (root package)
 src/apiTest/java/... REST Assured API tests, OpenAPI contract check, Toxiproxy network-failure test
+src/uiTest/java/...  Playwright UI tests of the /ui terminal page
 ops/                 Prometheus scrape config, Grafana provisioning and dashboard
 Dockerfile           multi-stage build (bootJar only) → JRE 21 runtime, non-root
 docker-compose.yml   app + PostgreSQL + Redis + Prometheus + Grafana
@@ -534,7 +545,8 @@ Thymeleaf (one test-target page)
 **Data:** PostgreSQL 16 · Flyway · Redis 7 (Spring Data Redis / Lettuce)
 
 **Testing:** JUnit 5 · Mockito · AssertJ · MockMvc · REST Assured ·
-Testcontainers · Toxiproxy · Spring Security Test · JaCoCo · PIT · k6
+Testcontainers · Toxiproxy · Playwright for Java · Spring Security Test · JaCoCo ·
+PIT · k6
 
 **Delivery:** Gradle (Kotlin DSL) · Docker (multi-stage) · Docker Compose ·
 GitHub Actions · GitHub Container Registry · Trivy
@@ -570,7 +582,7 @@ Actuator · Micrometer · Prometheus · Grafana
 - [x] Network-failure idempotency test with Toxiproxy: the first response is cut after the commit, the retry returns the same transfer
 - [x] k6 load test with deliberate same-key retries and a ledger reconciliation afterwards
 - [x] A single server-rendered test-target page (`/ui`, Thymeleaf, signed in with the terminal's API key)
-- [ ] Playwright UI tests against that page
+- [x] Playwright UI tests against that page (headless Chromium, screenshot + trace on failure)
 - [x] Ephemeral-environment smoke test against the published image (CD) and the PR image (CI)
 
 Out of scope by design: message brokers, microservices, a frontend (beyond
