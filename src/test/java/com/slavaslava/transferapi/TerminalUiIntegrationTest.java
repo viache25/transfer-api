@@ -36,7 +36,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -101,13 +100,13 @@ class TerminalUiIntegrationTest {
     void pagesRedirectToTheLoginFormWithoutASession() throws Exception {
         mockMvc.perform(get("/ui"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrlPattern("**/ui/login"));
+                .andExpect(redirectedUrl("/ui/login"));
     }
 
     @Test
     void anXApiKeyHeaderDoesNotOpenThePages() throws Exception {
         mockMvc.perform(get("/ui").header("X-API-Key", API_KEY))
-                .andExpect(redirectedUrlPattern("**/ui/login"));
+                .andExpect(redirectedUrl("/ui/login"));
     }
 
     @Test
