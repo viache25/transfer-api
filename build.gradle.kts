@@ -1,7 +1,7 @@
 plugins {
     java
     jacoco
-    id("org.springframework.boot") version "4.1.1"
+    id("org.springframework.boot") version "4.1.2"
     id("io.spring.dependency-management") version "1.1.7"
     id("info.solidsoft.pitest") version "1.19.0"
 }
@@ -30,10 +30,10 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
     implementation("org.springframework.boot:spring-boot-flyway")
     implementation("io.micrometer:micrometer-registry-prometheus")
-    implementation("com.bucket4j:bucket4j_jdk17-core:8.20.0")
+    implementation("com.bucket4j:bucket4j_jdk17-core:8.21.0")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.2.0")
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
@@ -56,7 +56,7 @@ configurations[apiTest.implementationConfigurationName].extendsFrom(configuratio
 configurations[apiTest.runtimeOnlyConfigurationName].extendsFrom(configurations.testRuntimeOnly.get())
 
 dependencies {
-    "apiTestImplementation"("io.rest-assured:rest-assured:6.0.0")
+    "apiTestImplementation"("io.rest-assured:rest-assured:6.3.0")
     "apiTestImplementation"("org.testcontainers:testcontainers-toxiproxy")
 }
 
@@ -79,7 +79,7 @@ configurations[uiTest.implementationConfigurationName].extendsFrom(configuration
 configurations[uiTest.runtimeOnlyConfigurationName].extendsFrom(configurations.testRuntimeOnly.get())
 
 dependencies {
-    "uiTestImplementation"("com.microsoft.playwright:playwright:1.63.0")
+    "uiTestImplementation"("com.microsoft.playwright:playwright:1.64.0")
 }
 
 // Installs the Chromium build this Playwright version needs into ~/.cache/ms-playwright (a quick no-op
