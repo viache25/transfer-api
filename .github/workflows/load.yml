@@ -5,12 +5,10 @@ name: Load test
 # ledger reconciliation at the end proves no money was created, lost or moved twice.
 #
 # Not part of CI: it builds the image and runs for a minute, and latency numbers from a shared
-# runner are too noisy to gate every pull request on. It runs weekly (to catch regressions and
-# drift, like nightly.yml and mutation.yml), on demand, and on pull requests that change the load
-# test itself, so a broken script can't be merged.
+# runner are too noisy to gate every pull request on. It runs on demand and on pull requests that
+# change the load test itself, so a broken script can't be merged. The weekly schedule is switched
+# off (re-add `schedule` to restore it).
 on:
-  schedule:
-    - cron: '0 4 * * 0'   # Sundays 04:00 UTC
   workflow_dispatch:
     inputs:
       terminals:

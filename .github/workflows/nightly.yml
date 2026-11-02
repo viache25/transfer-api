@@ -1,11 +1,10 @@
 name: Nightly
 
-# Full build every night with no Gradle task cache hits, even when nothing was
-# pushed: surfaces flaky tests (especially the concurrency ones) and drift from
-# the outside world (new base images, a Maven Central or Testcontainers change).
+# Full build with no Gradle task cache hits, even when nothing was pushed:
+# surfaces flaky tests (especially the concurrency ones) and drift from the
+# outside world (new base images, a Maven Central or Testcontainers change).
+# Manual only: the daily schedule is switched off (re-add `schedule` to restore it).
 on:
-  schedule:
-    - cron: '0 2 * * *'   # 02:00 UTC
   workflow_dispatch:
 
 permissions:

@@ -1,10 +1,9 @@
 name: Mutation testing
 
-# Weekly PIT run over service/ and domain/ (Docker-free unit tests only).
+# PIT run over service/ and domain/ (Docker-free unit tests only), on demand.
 # Not part of CI: too slow to run on every pull request.
+# Manual only: the weekly schedule is switched off (re-add `schedule` to restore it).
 on:
-  schedule:
-    - cron: '0 3 * * 1'   # Mondays 03:00 UTC
   workflow_dispatch:
 
 permissions:
