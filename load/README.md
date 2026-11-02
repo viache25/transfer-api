@@ -85,7 +85,7 @@ already there.
 and writes the numbers to the run summary. The k6 summary (`summary.json`) and an HTML report
 (k6 web dashboard export) are uploaded as the `k6-report` artifact.
 
-It runs weekly (Sundays 04:00 UTC), on demand (`workflow_dispatch`, with the number of terminals
+It runs on demand (`workflow_dispatch`, with the number of terminals
 and the duration as inputs), and on pull requests that change `load/` or the workflow. It is not
 part of the per-PR CI gate: it builds the image and runs for a minute, and latency measured on a
 shared runner is too noisy to block unrelated changes on.
